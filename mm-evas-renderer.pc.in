@@ -1,0 +1,13 @@
+# Package Information for pkg-config
+
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir = @libdir@
+includedir = @includedir@
+
+Name: mm-evas-renderer
+Description: Multimedia Framework Evas Renderer Library
+Version:
+Requires:
+Libs: -L${libdir} -lmmfevasrenderer
+Cflags: -I${includedir}/mmf
