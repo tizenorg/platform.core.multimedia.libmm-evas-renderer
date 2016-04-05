@@ -106,6 +106,10 @@ enum {
 };
 
 /* internal */
+#ifdef _DEBUG_INDEX
+void __print_idx(mm_evas_info *evas_info);
+#endif
+void _free_previous_packets(mm_evas_info *evas_info);
 int _mm_evas_renderer_create(mm_evas_info **evas_info);
 int _mm_evas_renderer_destroy(mm_evas_info **evas_info);
 int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo);
@@ -150,7 +154,7 @@ static void _evas_render_pre_cb(void *data, Evas *e, void *event_info)
 		LOGW("there is no esink info.... esink : %p, or eo is NULL returning", evas_info);
 		return;
 	}
-	//LOGI("- test -"); //@@@@@ pre_cb will be deleted. actually it is useless
+	/* LOGI("- test -"); pre_cb will be used for flush_buffer */
 }
 
 static void _evas_del_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
@@ -171,7 +175,7 @@ static void _evas_del_cb(void *data, Evas *e, Evas_Object *obj, void *event_info
 void _evas_pipe_cb(void *data, void *buffer, update_info info)
 {
 	mm_evas_info *evas_info = data;
-	int ret;
+
 	LOGD("[ENTER]");
 
 	if (!evas_info) {
@@ -183,7 +187,8 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 
 	if (!evas_info->eo) {
 		LOGW("evas_info %p", evas_info);
-		goto ERROR;
+		g_mutex_unlock(&evas_info->mp_lock);
+		return;
 	}
 
 	LOGD("evas_info : %p, evas_info->eo : %p", evas_info, evas_info->eo);
@@ -202,16 +207,23 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 
 	if (info != UPDATE_TBM_SURF) {
 		LOGW("invalid info type : %d", info);
-		goto ERROR;
+		g_mutex_unlock(&evas_info->mp_lock);
+		return;
 	}
 
-	/* normally get tbm surf in pipe callback. if not, we can get changed tbm surf by other threads */
-	ret = media_packet_get_tbm_surface(evas_info->pkt[evas_info->cur_idx], &evas_info->tbm_surf);
-	if (ret != MEDIA_PACKET_ERROR_NONE || !evas_info->tbm_surf) {
-		LOGW("get_tbm_surface is failed");
-		goto ERROR;
+	if (evas_info->cur_idx==-1 || !evas_info->pkt_info[evas_info->cur_idx].tbm_surf) {
+		LOGW("cur_idx %d, tbm_surf may be NULL", evas_info->cur_idx);
+		g_mutex_unlock(&evas_info->mp_lock);
+		return;
 	}
-	tbm_format tbm_fmt = tbm_surface_get_format(evas_info->tbm_surf);
+	g_mutex_lock(&evas_info->idx_lock);
+	/* index */
+	gint cur_idx = evas_info->cur_idx;
+	gint prev_idx = evas_info->pkt_info[cur_idx].prev;
+
+	LOGD("received (idx %d, packet %p)", cur_idx, evas_info->pkt_info[cur_idx].packet);
+
+	tbm_format tbm_fmt = tbm_surface_get_format(evas_info->pkt_info[evas_info->cur_idx].tbm_surf);
 	switch (tbm_fmt) {
 	case TBM_FORMAT_NV12:
 		LOGD("tbm_surface format : TBM_FORMAT_NV12");
@@ -224,12 +236,10 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 		break;
 	}
 	/* it is needed to skip setting when state is pause */
-	LOGD("received (tbm_surf %p)", evas_info->tbm_surf);
-
 	Evas_Native_Surface surf;
 	surf.type = EVAS_NATIVE_SURFACE_TBM;
 	surf.version = EVAS_NATIVE_SURFACE_VERSION;
-	surf.data.tbm.buffer = evas_info->tbm_surf;
+	surf.data.tbm.buffer = evas_info->pkt_info[cur_idx].tbm_surf;
 //  surf.data.tbm.rot = evas_info->rotate_angle;
 //  surf.data.tbm.flip = evas_info->flip;
 
@@ -266,31 +276,60 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 	LOGD("GEO_METHOD : src(%dx%d), dst(%dx%d), dst_x(%d), dst_y(%d), rotate(%d), flip(%d)", evas_info->w, evas_info->h, evas_info->eo_size.w, evas_info->eo_size.h, evas_info->eo_size.x, evas_info->eo_size.y, evas_info->rotate_angle, evas_info->flip);
 
 	/* when _evas_pipe_cb is called sequentially, previous packet and current packet will be the same */
-	if ((evas_info->prev_idx != -1) && evas_info->pkt[evas_info->prev_idx] && (evas_info->prev_idx != evas_info->cur_idx)) {
-		LOGD("destroy previous packet [%p] idx %d", evas_info->pkt[evas_info->prev_idx], evas_info->prev_idx);
-		if (media_packet_destroy(evas_info->pkt[evas_info->prev_idx]) != MEDIA_PACKET_ERROR_NONE)
-			LOGE("media_packet_destroy failed %p", evas_info->pkt[evas_info->prev_idx]);
-		evas_info->pkt[evas_info->prev_idx] = NULL;
-		evas_info->sent_buffer_cnt--;
-		LOGD("sent packet %d", evas_info->sent_buffer_cnt);
-	}
-	evas_info->prev_idx = evas_info->cur_idx;
+	if ((prev_idx != -1) && evas_info->pkt_info[prev_idx].packet && (prev_idx != cur_idx))
+		_free_previous_packets(evas_info);
 
 	LOGD("[LEAVE]");
+	g_mutex_unlock(&evas_info->idx_lock);
 	g_mutex_unlock(&evas_info->mp_lock);
 
 	return;
 
  ERROR:
-	if ((evas_info->prev_idx != -1) && evas_info->pkt[evas_info->prev_idx]) {
-		LOGD("cant render. destroy previous packet [%p] idx %d", evas_info->pkt[evas_info->prev_idx], evas_info->prev_idx);
-		if (media_packet_destroy(evas_info->pkt[evas_info->prev_idx]) != MEDIA_PACKET_ERROR_NONE)
-			LOGE("media_packet_destroy failed %p", evas_info->pkt[evas_info->prev_idx]);
-		evas_info->pkt[evas_info->prev_idx] = NULL;
-		evas_info->sent_buffer_cnt--;
+	if ((prev_idx != -1) && evas_info->pkt_info[prev_idx].packet) {
+		LOGI("cant render");
+		_free_previous_packets(evas_info);
 	}
-	evas_info->prev_idx = evas_info->cur_idx;
+	g_mutex_unlock(&evas_info->idx_lock);
 	g_mutex_unlock(&evas_info->mp_lock);
+}
+
+#ifdef _DEBUG_INDEX
+void __print_idx(mm_evas_info *evas_info)
+{
+	gint prev_idx = evas_info->pkt_info[evas_info->cur_idx].prev;
+	LOGE("***** start cur_idx : %d -> prev_idx : %d", evas_info->cur_idx, prev_idx);
+	while(prev_idx != -1)
+	{
+		LOGE("***** cur_idx : %d -> prev_idx : %d", prev_idx, evas_info->pkt_info[prev_idx].prev);
+		prev_idx = evas_info->pkt_info[prev_idx].prev;
+	}
+	LOGE("***** end");
+	return;
+}
+#endif
+
+void _free_previous_packets(mm_evas_info *evas_info)
+{
+	gint index = evas_info->cur_idx;
+	gint prev_idx = evas_info->pkt_info[index].prev;
+
+	while(prev_idx != -1)
+	{
+		LOGD("destroy previous packet [%p] idx %d", evas_info->pkt_info[prev_idx].packet, prev_idx);
+		if (media_packet_destroy(evas_info->pkt_info[prev_idx].packet) != MEDIA_PACKET_ERROR_NONE)
+			LOGE("media_packet_destroy failed %p", evas_info->pkt_info[prev_idx].packet);
+		evas_info->pkt_info[prev_idx].packet = NULL;
+		evas_info->pkt_info[prev_idx].tbm_surf = NULL;
+		evas_info->pkt_info[index].prev = -1;
+		evas_info->sent_buffer_cnt--;
+
+		/* move index to previous index */
+		index= prev_idx;
+		prev_idx = evas_info->pkt_info[prev_idx].prev;
+		LOGD("sent packet %d", evas_info->sent_buffer_cnt);
+	}
+	return;
 }
 
 static int _get_video_size(media_packet_h packet, mm_evas_info *evas_info)
@@ -305,7 +344,7 @@ static int _get_video_size(media_packet_h packet, mm_evas_info *evas_info)
 			return true;
 		} else
 			LOGW("media_format_get_video_info is failed");
-		if (media_format_unref(fmt) != MEDIA_PACKET_ERROR_NONE)	//because of media_packet_get_format
+		if (media_format_unref(fmt) != MEDIA_PACKET_ERROR_NONE)	/* because of media_packet_get_format */
 			LOGW("media_format_unref is failed");
 	} else {
 		LOGW("media_packet_get_format is failed");
@@ -317,7 +356,7 @@ int _find_empty_index(mm_evas_info *evas_info)
 {
 	int i;
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
-		if (!evas_info->pkt[i]) {
+		if (!evas_info->pkt_info[i].packet) {
 			LOGD("selected idx %d", i);
 			return i;
 		}
@@ -342,14 +381,14 @@ void _reset_pipe(mm_evas_info *evas_info)
 
 	/* destroy all packets */
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
-		if (evas_info->pkt[i]) {
-			LOGD("destroy packet [%p]", evas_info->pkt[i]);
-			ret = media_packet_destroy(evas_info->pkt[i]);
+		if (evas_info->pkt_info[i].packet) {
+			LOGD("destroy packet [%p]", evas_info->pkt_info[i].packet);
+			ret = media_packet_destroy(evas_info->pkt_info[i].packet);
 			if (ret != MEDIA_PACKET_ERROR_NONE)
-				LOGW("media_packet_destroy failed %p", evas_info->pkt[i]);
+				LOGW("media_packet_destroy failed %p", evas_info->pkt_info[i].packet);
 			else
 				evas_info->sent_buffer_cnt--;
-			evas_info->pkt[i] = NULL;
+			evas_info->pkt_info[i].packet = NULL;
 		}
 	}
 
@@ -394,6 +433,7 @@ int _mm_evas_renderer_create(mm_evas_info **evas_info)
 		LOGD("Success create evas_info(%p)", *evas_info);
 	}
 	g_mutex_init(&ptr->mp_lock);
+	g_mutex_init(&ptr->idx_lock);
 
 	return MM_ERROR_NONE;
 
@@ -412,6 +452,7 @@ int _mm_evas_renderer_destroy(mm_evas_info **evas_info)
 
 	ret = _mm_evas_renderer_reset(ptr);
 	g_mutex_clear(&ptr->mp_lock);
+	g_mutex_clear(&ptr->idx_lock);
 
 	g_free(ptr);
 	ptr = NULL;
@@ -423,14 +464,22 @@ int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo)
 {
 	MM_CHECK_NULL(evas_info);
 	MM_CHECK_NULL(eo);
+	g_mutex_lock(&evas_info->idx_lock);
 
 	LOGD("set evas_info");
+	int i;
+	for (i = 0; i < MAX_PACKET_NUM; i++) {
+		evas_info->pkt_info[i].packet = NULL;
+		evas_info->pkt_info[i].tbm_surf = NULL;
+		evas_info->pkt_info[i].prev = -1;
+	}
 
-	evas_info->prev_idx = evas_info->cur_idx = -1;
+	evas_info->cur_idx = -1;
 	evas_info->eo = eo;
 	evas_info->epipe = ecore_pipe_add((Ecore_Pipe_Cb) _evas_pipe_cb, evas_info);
 	if (!evas_info->epipe) {
 		LOGE("pipe is not created");
+		g_mutex_unlock(&evas_info->idx_lock);
 		return MM_ERROR_UNKNOWN;
 	}
 	LOGD("created pipe %p", evas_info->epipe);
@@ -439,15 +488,19 @@ int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo)
 	evas_object_geometry_get(evas_info->eo, &evas_info->eo_size.x, &evas_info->eo_size.y, &evas_info->eo_size.w, &evas_info->eo_size.h);
 	LOGI("evas object %p (%d, %d, %d, %d)", evas_info->eo, evas_info->eo_size.x, evas_info->eo_size.y, evas_info->eo_size.w, evas_info->eo_size.h);
 
+	g_mutex_unlock(&evas_info->idx_lock);
+
 	return MM_ERROR_NONE;
 }
 
 int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 {
 	MM_CHECK_NULL(evas_info);
+	g_mutex_lock(&evas_info->idx_lock);
 
 	int i;
-	int ret = MEDIA_PACKET_ERROR_NONE;
+	int ret = MM_ERROR_NONE;
+	int ret_mp = MEDIA_PACKET_ERROR_NONE;
 
 	if (evas_info->eo) {
 		_mm_evas_renderer_unset_callback(evas_info);
@@ -462,29 +515,33 @@ int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 
 	evas_info->eo_size.x = evas_info->eo_size.y = evas_info->eo_size.w = evas_info->eo_size.h = 0;
 	evas_info->w = evas_info->h = 0;
-	evas_info->tbm_surf = NULL;
 
 	g_mutex_lock(&evas_info->mp_lock);
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
-		if (evas_info->pkt[i]) {
+		if (evas_info->pkt_info[i].packet) {
 			/* destroy all packets */
-			LOGD("destroy packet [%p]", evas_info->pkt[i]);
-			ret = media_packet_destroy(evas_info->pkt[i]);
-			if (ret != MEDIA_PACKET_ERROR_NONE)
-				LOGW("media_packet_destroy failed %p", evas_info->pkt[i]);
+			LOGD("destroy packet [%p]", evas_info->pkt_info[i].packet);
+			ret_mp = media_packet_destroy(evas_info->pkt_info[i].packet);
+			if (ret_mp != MEDIA_PACKET_ERROR_NONE) {
+				LOGW("media_packet_destroy failed %p", evas_info->pkt_info[i].packet);
+				ret = MM_ERROR_UNKNOWN;
+			}
 			else
 				evas_info->sent_buffer_cnt--;
-			evas_info->pkt[i] = NULL;
+			evas_info->pkt_info[i].packet = NULL;
+			evas_info->pkt_info[i].tbm_surf = NULL;
+			evas_info->pkt_info[i].prev = -1;
 		}
 	}
 	g_mutex_unlock(&evas_info->mp_lock);
-
 	if (evas_info->sent_buffer_cnt != 0)
 		LOGE("it should be 0 --> [%d]", evas_info->sent_buffer_cnt);
 	evas_info->sent_buffer_cnt = 0;
-	evas_info->prev_idx = evas_info->cur_idx = -1;
+	evas_info->cur_idx = -1;
 
-	return MM_ERROR_NONE;
+	g_mutex_unlock(&evas_info->idx_lock);
+
+	return ret;
 }
 
 void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *result)
@@ -606,6 +663,8 @@ void mm_evas_renderer_write(media_packet_h packet, void *data)
 	mm_evas_info *handle = (mm_evas_info *)data;
 	int ret = MEDIA_PACKET_ERROR_NONE;
 	bool has;
+	tbm_surface_h tbm_surf;
+	gint index;
 
 	LOGD("packet [%p]", packet);
 
@@ -613,18 +672,21 @@ void mm_evas_renderer_write(media_packet_h packet, void *data)
 		LOGE("handle %p or evas_info %p is NULL", data, handle);
 		goto ERROR;
 	}
+	g_mutex_lock(&handle->idx_lock);
 
 	ret = media_packet_has_tbm_surface_buffer(packet, &has);
 	if (ret != MEDIA_PACKET_ERROR_NONE) {
 		LOGW("has_tbm_surface is failed");
+		g_mutex_unlock(&handle->idx_lock);
 		goto ERROR;
 	}
 	/* FIXME: when setCaps occurs, _get_video_size should be called */
 	/* currently we are always checking it */
 	if (has && _get_video_size(packet, handle)) {
 		/* Attention! if this error occurs, we need to consider managing buffer */
-		if (handle->sent_buffer_cnt > 14) {
+		if (handle->sent_buffer_cnt > 10) {
 			LOGE("too many buffers are not released %d", handle->sent_buffer_cnt);
+			g_mutex_unlock(&handle->idx_lock);
 			goto ERROR;
 #if 0
 			/* FIXME: fix this logic */
@@ -635,24 +697,45 @@ void mm_evas_renderer_write(media_packet_h packet, void *data)
 			g_mutex_unlock(&handle->mp_lock);
 #endif
 		}
-		handle->cur_idx = _find_empty_index(handle);
-		if (handle->cur_idx == -1)
+		ret = media_packet_get_tbm_surface(packet, &tbm_surf);
+		if (ret != MEDIA_PACKET_ERROR_NONE || !tbm_surf) {
+			LOGW("get_tbm_surface is failed");
+			g_mutex_unlock(&handle->idx_lock);
 			goto ERROR;
-		handle->pkt[handle->cur_idx] = packet;
+		}
+
+		/* find new index for current packet */
+		index = _find_empty_index(handle);
+		if (index == -1) {
+			g_mutex_unlock(&handle->idx_lock);
+			goto ERROR;
+		}
+
+		/* save previous index */
+		handle->pkt_info[index].prev = handle->cur_idx;
+		handle->pkt_info[index].packet = packet;
+		handle->pkt_info[index].tbm_surf = tbm_surf;
+		handle->cur_idx = index;
 		handle->sent_buffer_cnt++;
 		LOGD("sent packet %d", handle->sent_buffer_cnt);
+
 		ret = ecore_pipe_write(handle->epipe, handle, UPDATE_TBM_SURF);
 		if (!ret) {
-			handle->pkt[handle->cur_idx] = NULL;
-			handle->cur_idx = handle->prev_idx;
+			handle->pkt_info[index].packet = NULL;
+			handle->pkt_info[index].tbm_surf = NULL;
+			handle->pkt_info[index].prev = -1;
+			handle->cur_idx = handle->pkt_info[index].prev;
 			handle->sent_buffer_cnt--;
 			LOGW("Failed to ecore_pipe_write() for updating tbm surf\n");
+			g_mutex_unlock(&handle->idx_lock);
 			goto ERROR;
 		}
 	} else {
 		LOGW("no tbm_surf");
+		g_mutex_unlock(&handle->idx_lock);
 		goto ERROR;
 	}
+	g_mutex_unlock(&handle->idx_lock);
 
 	return;
 
@@ -705,6 +788,8 @@ int mm_evas_renderer_update_param(MMHandleType handle)
 
 int mm_evas_renderer_create(MMHandleType *handle, Evas_Object *eo)
 {
+	MM_CHECK_NULL(handle);
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = NULL;
 
@@ -728,6 +813,8 @@ int mm_evas_renderer_create(MMHandleType *handle, Evas_Object *eo)
 
 int mm_evas_renderer_destroy(MMHandleType *handle)
 {
+	MM_CHECK_NULL(handle);
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)*handle;
 
