@@ -70,6 +70,12 @@ typedef enum {
 } visible_info;
 
 typedef struct {
+	media_packet_h packet;
+	tbm_surface_h tbm_surf;
+	gint prev; /* keep previous index for destroying remained packet */
+} packet_info;
+
+typedef struct {
 	gint x;
 	gint y;
 	gint w;
@@ -96,17 +102,15 @@ typedef struct {
 	tbm_surface_h tbm_surf;
 
 	/* media packet */
-	media_packet_h prev_mp;
-	media_packet_h cur_mp;
-	media_packet_h pkt[MAX_PACKET_NUM];
-	gint prev_idx;
+	packet_info pkt_info[MAX_PACKET_NUM];
 	gint cur_idx;
 
 	/* count undestroyed media packet */
 	guint sent_buffer_cnt;
 
 	/* lock */
-	GMutex mp_lock;
+	GMutex mp_lock; /* media_packet free lock */
+	GMutex idx_lock; /* to keep value of cur_idx */
 } mm_evas_info;
 
 /* create and initialize evas_info */
