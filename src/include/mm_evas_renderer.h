@@ -126,6 +126,9 @@ int mm_evas_renderer_get_rotation(MMHandleType handle, int *rotate);
 /* set and get geometry value */
 int mm_evas_renderer_set_geometry(MMHandleType handle, int mode);
 int mm_evas_renderer_get_geometry(MMHandleType handle, int *mode);
+/* set and get flip value */
+int mm_evas_renderer_set_flip(MMHandleType handle, int flip);
+int mm_evas_renderer_get_flip(MMHandleType handle, int *flip);
 /* update all properties */
 int mm_evas_renderer_update_param(MMHandleType handle);
 /* call ecore_pipe_write, when packet is sent */
