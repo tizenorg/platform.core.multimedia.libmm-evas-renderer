@@ -82,6 +82,11 @@ typedef struct {
 	gint h;
 } rect_info;
 
+typedef struct {
+	void *bo;
+	tbm_surface_h tbm_surf;
+} flush_info;
+
 /* evas info for evas surface type */
 typedef struct {
 	Evas_Object *eo;
@@ -111,6 +116,11 @@ typedef struct {
 	/* lock */
 	GMutex mp_lock; /* media_packet free lock */
 	GMutex idx_lock; /* to keep value of cur_idx */
+
+	/* flush buffer */
+	flush_info *flush_buffer;
+	gboolean retrieve_packet; /* after flush buffer is made by API, flush will be executed in main thread callback */
+	gboolean keep_screen;
 } mm_evas_info;
 
 /* create and initialize evas_info */
@@ -130,6 +140,9 @@ int mm_evas_renderer_get_geometry(MMHandleType handle, int *mode);
 int mm_evas_renderer_update_param(MMHandleType handle);
 /* call ecore_pipe_write, when packet is sent */
 void mm_evas_renderer_write(media_packet_h packet, void *data);
+/* if user want to retrieve all packets, this API will be called */
+/* if keep_screen is set to true, flush buffer will be made */
+int mm_evas_renderer_retrieve_all_packets (MMHandleType handle, int keep_screen);
 
 #ifdef __cplusplus
 }
