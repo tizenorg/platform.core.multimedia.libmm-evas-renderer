@@ -27,7 +27,7 @@
 #include <stdlib.h>
 #include <dlog.h>
 #include <mm_error.h>
-
+#include <sys/syscall.h>
 #include "mm_evas_renderer.h"
 
 #ifdef LOG_TAG
@@ -110,12 +110,16 @@ enum {
 void __print_idx(mm_evas_info *evas_info);
 #endif
 void _free_previous_packets(mm_evas_info *evas_info);
+int _flush_packets(mm_evas_info *evas_info);
 int _mm_evas_renderer_create(mm_evas_info **evas_info);
 int _mm_evas_renderer_destroy(mm_evas_info **evas_info);
 int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo);
 int _mm_evas_renderer_reset(mm_evas_info *evas_info);
 void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *result);
 int _mm_evas_renderer_apply_geometry(mm_evas_info *evas_info);
+int _mm_evas_renderer_retrieve_all_packets(mm_evas_info *evas_info, bool keep_screen);
+int _mm_evas_renderer_make_flush_buffer(mm_evas_info *evas_info);
+void _mm_evas_renderer_release_flush_buffer(mm_evas_info *evas_info);
 static void _mm_evas_renderer_set_callback(mm_evas_info *evas_info);
 static void _mm_evas_renderer_unset_callback(mm_evas_info *evas_info);
 
@@ -150,11 +154,18 @@ static void _evas_resize_cb(void *data, Evas *e, Evas_Object *obj, void *event_i
 static void _evas_render_pre_cb(void *data, Evas *e, void *event_info)
 {
 	mm_evas_info *evas_info = data;
+
 	if (!evas_info || !evas_info->eo) {
 		LOGW("there is no esink info.... esink : %p, or eo is NULL returning", evas_info);
 		return;
 	}
-	/* LOGI("- test -"); pre_cb will be used for flush_buffer */
+
+	/* flush will be executed in this callback normally, */
+	/* because native_surface_set must be called in main thread */
+	if (evas_info->retrieve_packet) {
+		if (_flush_packets(evas_info) != MM_ERROR_NONE)
+			LOGE("flushing packets are failed");
+	}
 }
 
 static void _evas_del_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
@@ -223,7 +234,7 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 
 	LOGD("received (idx %d, packet %p)", cur_idx, evas_info->pkt_info[cur_idx].packet);
 
-	tbm_format tbm_fmt = tbm_surface_get_format(evas_info->pkt_info[evas_info->cur_idx].tbm_surf);
+	tbm_format tbm_fmt = tbm_surface_get_format(evas_info->pkt_info[cur_idx].tbm_surf);
 	switch (tbm_fmt) {
 	case TBM_FORMAT_NV12:
 		LOGD("tbm_surface format : TBM_FORMAT_NV12");
@@ -366,11 +377,96 @@ int _find_empty_index(mm_evas_info *evas_info)
 	return -1;
 }
 
+int _flush_packets(mm_evas_info *evas_info)
+{
+	int ret = MM_ERROR_NONE;
+	int ret_mp = MEDIA_PACKET_ERROR_NONE;
+	int i = 0;
+
+	if (!evas_info) {
+		LOGW("there is no esink info");
+		return MM_ERROR_INVALID_ARGUMENT;
+	}
+	if (evas_info->keep_screen) {
+		/* update the screen only if visible is ture */
+		if (evas_info->visible == VISIBLE_TRUE) {
+			Evas_Native_Surface surf;
+			rect_info result = { 0 };
+			evas_object_geometry_get(evas_info->eo, &evas_info->eo_size.x, &evas_info->eo_size.y, &evas_info->eo_size.w, &evas_info->eo_size.h);
+			if (!evas_info->eo_size.w || !evas_info->eo_size.h) {
+				LOGE("there is no information for evas object size");
+				return MM_ERROR_INVALID_ARGUMENT;
+			}
+			_mm_evas_renderer_update_geometry(evas_info, &result);
+			if (!result.w || !result.h) {
+				LOGE("no information about geometry (%d, %d)", result.w, result.h);
+				return MM_ERROR_INVALID_ARGUMENT;
+			}
+
+			if (evas_info->use_ratio) {
+		//      surf.data.tbm.ratio = (float) evas_info->w / evas_info->h;
+				LOGD("set ratio for letter mode");
+			}
+			evas_object_size_hint_align_set(evas_info->eo, EVAS_HINT_FILL, EVAS_HINT_FILL);
+			evas_object_size_hint_weight_set(evas_info->eo, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
+			if (evas_info->w > 0 && evas_info->h > 0)
+				evas_object_image_size_set(evas_info->eo, evas_info->w, evas_info->h);
+
+			if (result.x || result.y)
+				LOGD("coordinate x, y (%d, %d) for locating video to center", result.x, result.y);
+			evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
+
+			/* set flush buffer */
+			surf.type = EVAS_NATIVE_SURFACE_TBM;
+			surf.version = EVAS_NATIVE_SURFACE_VERSION;
+			surf.data.tbm.buffer = evas_info->flush_buffer->tbm_surf;
+	//		surf.data.tbm.rot = evas_info->rotate_angle;
+	//		surf.data.tbm.flip = evas_info->flip;
+			evas_object_image_native_surface_set(evas_info->eo, &surf);
+
+			LOGD("flush_buffer surf(%p), rotate(%d), flip(%d)", evas_info->flush_buffer->tbm_surf, evas_info->rotate_angle, evas_info->flip);
+		}
+	} else {
+		/* unset evas native surface for displaying black screen */
+		evas_object_image_native_surface_set (evas_info->eo, NULL);
+		evas_object_image_data_set (evas_info->eo, NULL);
+	}
+	/* destroy all packets */
+	g_mutex_lock(&evas_info->mp_lock);
+	for (i = 0; i < MAX_PACKET_NUM; i++) {
+		if (evas_info->pkt_info[i].packet) {
+			LOGD("destroy packet [%p]", evas_info->pkt_info[i].packet);
+			ret_mp = media_packet_destroy(evas_info->pkt_info[i].packet);
+			if (ret_mp != MEDIA_PACKET_ERROR_NONE) {
+				LOGW("media_packet_destroy failed %p", evas_info->pkt_info[i].packet);
+				ret = MM_ERROR_UNKNOWN;
+			}
+			else
+				evas_info->sent_buffer_cnt--;
+			evas_info->pkt_info[i].packet = NULL;
+			evas_info->pkt_info[i].tbm_surf = NULL;
+			evas_info->pkt_info[i].prev = -1;
+		}
+	}
+
+	if (evas_info->sent_buffer_cnt != 0)
+		LOGE("it should be 0 --> [%d]", evas_info->sent_buffer_cnt);
+	evas_info->sent_buffer_cnt = 0;
+	evas_info->cur_idx = -1;
+	g_mutex_unlock(&evas_info->mp_lock);
+
+	evas_object_image_pixels_dirty_set (evas_info->eo, EINA_TRUE);
+	evas_info->retrieve_packet = FALSE;
+
+	return ret;
+}
+
 #if 0
-void _reset_pipe(mm_evas_info *evas_info)
+int _reset_pipe(mm_evas_info *evas_info)
 {
 	int i = 0;
-	int ret = MEDIA_PACKET_ERROR_NONE;
+	int ret = MM_ERROR_NONE;
+	int ret_mp = MEDIA_PACKET_ERROR_NONE;
 
 	/* delete old pipe */
 	if (evas_info->epipe) {
@@ -379,31 +475,42 @@ void _reset_pipe(mm_evas_info *evas_info)
 		evas_info->epipe = NULL;
 	}
 
-	/* destroy all packets */
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
 		if (evas_info->pkt_info[i].packet) {
+			/* destroy all packets */
 			LOGD("destroy packet [%p]", evas_info->pkt_info[i].packet);
-			ret = media_packet_destroy(evas_info->pkt_info[i].packet);
-			if (ret != MEDIA_PACKET_ERROR_NONE)
+			ret_mp = media_packet_destroy(evas_info->pkt_info[i].packet);
+			if (ret_mp != MEDIA_PACKET_ERROR_NONE) {
 				LOGW("media_packet_destroy failed %p", evas_info->pkt_info[i].packet);
+				ret = MM_ERROR_UNKNOWN;
+			}
 			else
 				evas_info->sent_buffer_cnt--;
 			evas_info->pkt_info[i].packet = NULL;
+			evas_info->pkt_info[i].tbm_surf = NULL;
+			evas_info->pkt_info[i].prev = -1;
 		}
 	}
+
+	if (evas_info->sent_buffer_cnt != 0)
+		LOGE("it should be 0 --> [%d]", evas_info->sent_buffer_cnt);
+	evas_info->sent_buffer_cnt = 0;
+	evas_info->cur_idx = -1;
 
 	/* make new pipe */
 	if (!evas_info->epipe) {
 		evas_info->epipe = ecore_pipe_add((Ecore_Pipe_Cb) _evas_pipe_cb, evas_info);
 		if (!evas_info->epipe) {
 			LOGE("pipe is not created");
+			ret = MM_ERROR_UNKNOWN;
 		}
 		LOGD("created pipe %p", evas_info->epipe);
 	}
 
-	return;
+	return ret;
 }
 #endif
+
 static void _mm_evas_renderer_set_callback(mm_evas_info *evas_info)
 {
 	if (evas_info->eo) {
@@ -515,6 +622,9 @@ int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 
 	evas_info->eo_size.x = evas_info->eo_size.y = evas_info->eo_size.w = evas_info->eo_size.h = 0;
 	evas_info->w = evas_info->h = 0;
+
+	if (evas_info->flush_buffer)
+		_mm_evas_renderer_release_flush_buffer(evas_info);
 
 	g_mutex_lock(&evas_info->mp_lock);
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
@@ -654,6 +764,161 @@ int _mm_evas_renderer_apply_geometry(mm_evas_info *evas_info)
 	return MM_ERROR_NONE;
 }
 
+int _mm_evas_renderer_retrieve_all_packets(mm_evas_info *evas_info, bool keep_screen)
+{
+	MM_CHECK_NULL(evas_info);
+
+	int ret = MM_ERROR_NONE;
+	pid_t pid = getpid();
+	pid_t tid = syscall(SYS_gettid);
+
+	/* make flush buffer */
+	if (keep_screen)
+		ret = _mm_evas_renderer_make_flush_buffer(evas_info);
+	evas_info->keep_screen = keep_screen;
+
+	LOGD("pid [%d], tid [%d]", pid, tid);
+	if (pid == tid) {
+		/* in this case, we deem it is main thread */
+		if (_flush_packets(evas_info) != MM_ERROR_NONE) {
+			LOGE("flushing packets are failed");
+			ret = MM_ERROR_UNKNOWN;
+		}
+	} else {
+		/* it will be executed to write flush buffer and destroy media packets in pre_cb */
+		evas_info->retrieve_packet = TRUE;
+	}
+
+	return ret;
+}
+
+/* make buffer for copying */
+int _mm_evas_renderer_make_flush_buffer (mm_evas_info *evas_info)
+{
+	if (evas_info->cur_idx == -1) {
+		LOGW("there is no remained buffer");
+		return MM_ERROR_INVALID_ARGUMENT;
+	}
+	media_packet_h packet = evas_info->pkt_info[evas_info->cur_idx].packet;
+	MM_CHECK_NULL(packet);
+
+	flush_info *flush_buffer = NULL;
+	tbm_bo src_bo = NULL;
+	tbm_surface_h src_tbm_surf = NULL;
+	int src_size = 0;
+	int size = 0;
+	tbm_bo bo = NULL;
+	tbm_format tbm_fmt;
+	tbm_bo_handle vaddr_src = {0};
+	tbm_bo_handle vaddr_dst = {0};
+	int ret = MM_ERROR_NONE;
+
+	if (evas_info->flush_buffer)
+		_mm_evas_renderer_release_flush_buffer(evas_info);
+
+	/* malloc buffer */
+	flush_buffer = (flush_info *)malloc(sizeof(flush_info));
+	if (flush_buffer == NULL) {
+		LOGE("malloc is failed");
+		return FALSE;
+	}
+	memset(flush_buffer, 0x0, sizeof(flush_info));
+
+	/* @@@ lock is needed, because write and this API can be called at the same time */
+	ret = media_packet_get_tbm_surface(packet, &src_tbm_surf);
+	if (ret != MEDIA_PACKET_ERROR_NONE || !src_tbm_surf) {
+		LOGW("get_tbm_surface is failed");
+		goto ERROR;
+	}
+
+	/* get src buffer info */
+	tbm_fmt = tbm_surface_get_format(src_tbm_surf);
+	src_bo = tbm_surface_internal_get_bo(src_tbm_surf, 0); //@@@ 0??
+	src_size = tbm_bo_size(src_bo);
+	if (!src_bo || !src_size) {
+		LOGE("bo(%p), size(%d)", src_bo, src_size);
+		goto ERROR;
+	}
+
+	/* create tbm surface */
+	flush_buffer->tbm_surf = tbm_surface_create(evas_info->w, evas_info->h, tbm_fmt);
+	if (!flush_buffer->tbm_surf)
+	{
+		LOGE("tbm_surf is NULL!!");
+		goto ERROR;
+	}
+
+	/* get bo and size */
+	bo = tbm_surface_internal_get_bo(flush_buffer->tbm_surf, 0); //@@@ 0??
+	size = tbm_bo_size(bo);
+	if (!bo || !size)
+	{
+		LOGE("bo(%p), size(%d)", bo, size);
+		goto ERROR;
+	}
+	flush_buffer->bo = bo;
+
+	vaddr_src = tbm_bo_map(src_bo, TBM_DEVICE_CPU, TBM_OPTION_READ|TBM_OPTION_WRITE);
+	vaddr_dst = tbm_bo_map(bo, TBM_DEVICE_CPU, TBM_OPTION_READ|TBM_OPTION_WRITE);
+	if (!vaddr_src.ptr || !vaddr_dst.ptr) {
+		LOGW("get vaddr failed src %p, dst %p", vaddr_src.ptr, vaddr_dst.ptr);
+		if (vaddr_src.ptr) {
+			tbm_bo_unmap(src_bo);
+		}
+		if (vaddr_dst.ptr) {
+			tbm_bo_unmap(bo);
+		}
+		goto ERROR;
+	} else {
+		memset (vaddr_dst.ptr, 0x0, size);
+		LOGW ("tbm_bo_map(vaddr) is finished, bo(%p), vaddr(%p)", bo, vaddr_dst.ptr);
+	}
+
+	/* copy buffer */
+	memcpy(vaddr_dst.ptr, vaddr_src.ptr, src_size);
+
+	tbm_bo_unmap(src_bo);
+	tbm_bo_unmap(bo);
+	LOGW("copy is done. tbm surface : %p src_size : %d", flush_buffer->tbm_surf, src_size);
+
+	evas_info->flush_buffer = flush_buffer;
+
+	return MM_ERROR_NONE;
+
+ERROR:
+	if (flush_buffer) {
+		if(flush_buffer->tbm_surf)
+		{
+			tbm_surface_destroy(flush_buffer->tbm_surf);
+			flush_buffer->tbm_surf = NULL;
+		}
+
+		free(flush_buffer);
+		flush_buffer = NULL;
+	}
+	return MM_ERROR_UNKNOWN;
+}
+
+/* release flush buffer */
+void _mm_evas_renderer_release_flush_buffer (mm_evas_info *evas_info)
+{
+	LOGW("release FLUSH BUFFER start");
+	if (evas_info->flush_buffer->bo) {
+		evas_info->flush_buffer->bo = NULL;
+	}
+	if (evas_info->flush_buffer->tbm_surf) {
+		tbm_surface_destroy(evas_info->flush_buffer->tbm_surf);
+		evas_info->flush_buffer->tbm_surf = NULL;
+	}
+
+	LOGW("release FLUSH BUFFER done");
+
+	free(evas_info->flush_buffer);
+	evas_info->flush_buffer = NULL;
+
+	return;
+}
+
 void mm_evas_renderer_write(media_packet_h packet, void *data)
 {
 	if (!packet) {
@@ -683,7 +948,7 @@ void mm_evas_renderer_write(media_packet_h packet, void *data)
 	/* currently we are always checking it */
 	if (has && _get_video_size(packet, handle)) {
 		/* Attention! if this error occurs, we need to consider managing buffer */
-		if (handle->sent_buffer_cnt > 10) {
+		if (handle->sent_buffer_cnt > 4) {
 			LOGE("too many buffers are not released %d", handle->sent_buffer_cnt);
 			goto ERROR;
 #if 0
@@ -931,4 +1196,18 @@ int mm_evas_renderer_get_geometry(MMHandleType handle, int *mode)
 	*mode = evas_info->display_geometry_method;
 
 	return MM_ERROR_NONE;
+}
+
+int mm_evas_renderer_retrieve_all_packets (MMHandleType handle, bool keep_screen)
+{
+	int ret = MM_ERROR_NONE;
+	mm_evas_info *evas_info = (mm_evas_info*) handle;
+
+	if (!evas_info) {
+		LOGW("skip it. it is not evas surface type or player is not prepared");
+		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
+	}
+	ret = _mm_evas_renderer_retrieve_all_packets(evas_info, keep_screen);
+
+	return ret;
 }
