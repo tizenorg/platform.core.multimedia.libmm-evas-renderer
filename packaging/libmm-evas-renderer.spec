@@ -1,6 +1,6 @@
 Name:       libmm-evas-renderer
 Summary:    Multimedia Framework Evas Renderer Library
-Version:    0.0.1
+Version:    0.0.2
 Release:    0
 Group:      Multimedia/Libraries
 License:    Apache-2.0
