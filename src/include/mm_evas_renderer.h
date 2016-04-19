@@ -99,6 +99,7 @@ typedef struct {
 	/* properties */
 	visible_info visible;
 	rect_info eo_size;
+	rect_info dst_roi;
 	gboolean use_ratio;
 	guint rotate_angle;
 	guint display_geometry_method;
@@ -136,6 +137,10 @@ int mm_evas_renderer_get_rotation(MMHandleType handle, int *rotate);
 /* set and get geometry value */
 int mm_evas_renderer_set_geometry(MMHandleType handle, int mode);
 int mm_evas_renderer_get_geometry(MMHandleType handle, int *mode);
+/* set and get coordinate and resolution value for the destination */
+/* it would be better not to call set_geometry for DISP_GEO_METHOD_CUSTOM_ROI */
+int mm_evas_renderer_set_roi_area(MMHandleType handle, int x, int y, int w, int h);
+int mm_evas_renderer_get_roi_area(MMHandleType handle, int *x, int *y, int *w, int *h);
 /* set and get flip value */
 int mm_evas_renderer_set_flip(MMHandleType handle, int flip);
 int mm_evas_renderer_get_flip(MMHandleType handle, int *flip);

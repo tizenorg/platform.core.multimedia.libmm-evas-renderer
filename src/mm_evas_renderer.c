@@ -87,6 +87,7 @@ enum {
 	DISP_GEO_METHOD_FULL_SCREEN,
 	DISP_GEO_METHOD_CROPPED_FULL_SCREEN,
 	DISP_GEO_METHOD_ORIGIN_SIZE_OR_LETTER_BOX,
+	DISP_GEO_METHOD_CUSTOM_ROI,
 	DISP_GEO_METHOD_NUM,
 };
 
@@ -585,8 +586,8 @@ int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo)
 		evas_info->pkt_info[i].tbm_surf = NULL;
 		evas_info->pkt_info[i].prev = -1;
 	}
-
 	evas_info->cur_idx = -1;
+	evas_info->dst_roi.x = evas_info->dst_roi.y = evas_info->dst_roi.w = evas_info->dst_roi.h = 0;
 	evas_info->eo = eo;
 	evas_info->epipe = ecore_pipe_add((Ecore_Pipe_Cb) _evas_pipe_cb, evas_info);
 	if (!evas_info->epipe) {
@@ -626,6 +627,7 @@ int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 	}
 
 	evas_info->eo_size.x = evas_info->eo_size.y = evas_info->eo_size.w = evas_info->eo_size.h = 0;
+	evas_info->dst_roi.x = evas_info->dst_roi.y = evas_info->dst_roi.w = evas_info->dst_roi.h = 0;
 	evas_info->w = evas_info->h = 0;
 
 	if (evas_info->flush_buffer)
@@ -727,6 +729,16 @@ void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *resul
 			result->w = evas_info->eo_size.w;
 			result->h = evas_info->eo_size.h;
 		}
+		break;
+	case DISP_GEO_METHOD_CUSTOM_ROI:
+		LOGD("custom roi mode");
+		evas_info->use_ratio= FALSE;
+		result->x = evas_info->dst_roi.x;
+		result->y = evas_info->dst_roi.y;
+		result->w = evas_info->dst_roi.w;
+		result->h = evas_info->dst_roi.h;
+		evas_object_move(evas_info->eo, result->x, result->y);
+		evas_object_resize(evas_info->eo, result->w, result->h);
 		break;
 	default:
 		LOGW("unsupported mode.");
@@ -1046,7 +1058,9 @@ int mm_evas_renderer_update_param(MMHandleType handle)
 			if (!ret) {
 				LOGW("fail to ecore_pipe_write() for updating visibility\n");
 				return MM_ERROR_UNKNOWN;
-			}
+			} else
+				ret = MM_ERROR_NONE;
+
 #if 0		/* FIXME: pause state only */
 			g_mutex_lock(&evas_info->idx_lock);
 			ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
@@ -1273,6 +1287,52 @@ int mm_evas_renderer_get_geometry(MMHandleType handle, int *mode)
 	return MM_ERROR_NONE;
 }
 
+int mm_evas_renderer_set_roi_area(MMHandleType handle, int x, int y, int w, int h)
+{
+	int ret = MM_ERROR_NONE;
+	mm_evas_info *evas_info = (mm_evas_info *)handle;
+
+	if (!evas_info) {
+		LOGW("skip it. it is not evas surface type or handle is not prepared");
+		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
+	}
+	if (!w || !h) {
+		LOGW("invalid resolution");
+		return MM_ERROR_INVALID_ARGUMENT;
+	}
+
+	/* display mode is set to DISP_GEO_METHOD_CUSTOM_ROI internally */
+	evas_info->display_geometry_method = DISP_GEO_METHOD_CUSTOM_ROI;
+	evas_info->dst_roi.x = x;
+	evas_info->dst_roi.y = y;
+	evas_info->dst_roi.w = w;
+	evas_info->dst_roi.h = h;
+	ret = _mm_evas_renderer_apply_geometry(evas_info);
+
+	return ret;
+}
+
+int mm_evas_renderer_get_roi_area(MMHandleType handle, int *x, int *y, int *w, int *h)
+{
+	mm_evas_info *evas_info = (mm_evas_info *)handle;
+
+	if (!evas_info) {
+		LOGW("skip it. it is not evas surface type or handle is not prepared");
+		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
+	}
+	if (evas_info->display_geometry_method != DISP_GEO_METHOD_CUSTOM_ROI) {
+		LOGW("invalid mode");
+		return MM_ERROR_INVALID_ARGUMENT;
+	}
+
+	*x = evas_info->dst_roi.x;
+	*y = evas_info->dst_roi.y;
+	*w = evas_info->dst_roi.w;
+	*h = evas_info->dst_roi.h;
+
+	return MM_ERROR_NONE;
+}
+
 int mm_evas_renderer_set_flip(MMHandleType handle, int flip)
 {
 	int ret = MM_ERROR_NONE;
@@ -1285,7 +1345,7 @@ int mm_evas_renderer_set_flip(MMHandleType handle, int flip)
 
 	switch(flip) {
 	case FLIP_NONE :
-		evas_info->flip = 0;
+		evas_info->flip = EVAS_IMAGE_ORIENT_NONE;
 		break;
 	case FLIP_HORIZONTAL:
 		evas_info->flip = EVAS_IMAGE_FLIP_HORIZONTAL;
@@ -1325,7 +1385,7 @@ int mm_evas_renderer_get_flip(MMHandleType handle, int *flip)
 	}
 
 	switch(evas_info->flip) {
-	case 0:
+	case EVAS_IMAGE_ORIENT_NONE:
 		*flip = FLIP_NONE;
 		break;
 	case EVAS_IMAGE_FLIP_HORIZONTAL:
