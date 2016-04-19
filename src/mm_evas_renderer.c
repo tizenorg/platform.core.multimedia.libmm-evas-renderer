@@ -160,11 +160,13 @@ static void _evas_render_pre_cb(void *data, Evas *e, void *event_info)
 		return;
 	}
 
-	/* flush will be executed in this callback normally, */
-	/* because native_surface_set must be called in main thread */
+	/* flush will be executed in this callback normally,
+	because native_surface_set must be called in main thread */
 	if (evas_info->retrieve_packet) {
+		g_mutex_lock(&evas_info->idx_lock);
 		if (_flush_packets(evas_info) != MM_ERROR_NONE)
 			LOGE("flushing packets are failed");
+		g_mutex_unlock(&evas_info->idx_lock);
 	}
 }
 
@@ -429,6 +431,8 @@ int _flush_packets(mm_evas_info *evas_info)
 		evas_object_image_native_surface_set (evas_info->eo, NULL);
 		evas_object_image_data_set (evas_info->eo, NULL);
 	}
+	LOGD("sent packet %d", evas_info->sent_buffer_cnt);
+
 	/* destroy all packets */
 	g_mutex_lock(&evas_info->mp_lock);
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
@@ -770,6 +774,10 @@ int _mm_evas_renderer_retrieve_all_packets(mm_evas_info *evas_info, bool keep_sc
 	pid_t pid = getpid();
 	pid_t tid = syscall(SYS_gettid);
 
+	/* write and this API can be called at the same time.
+	so lock is needed for counting sent_buffer_cnt correctly */
+	g_mutex_lock(&evas_info->idx_lock);
+
 	/* make flush buffer */
 	if (keep_screen)
 		ret = _mm_evas_renderer_make_flush_buffer(evas_info);
@@ -786,6 +794,7 @@ int _mm_evas_renderer_retrieve_all_packets(mm_evas_info *evas_info, bool keep_sc
 		/* it will be executed to write flush buffer and destroy media packets in pre_cb */
 		evas_info->retrieve_packet = TRUE;
 	}
+	g_mutex_unlock(&evas_info->idx_lock);
 
 	return ret;
 }
@@ -822,7 +831,6 @@ int _mm_evas_renderer_make_flush_buffer (mm_evas_info *evas_info)
 	}
 	memset(flush_buffer, 0x0, sizeof(flush_info));
 
-	/* @@@ lock is needed, because write and this API can be called at the same time */
 	ret = media_packet_get_tbm_surface(packet, &src_tbm_surf);
 	if (ret != MEDIA_PACKET_ERROR_NONE || !src_tbm_surf) {
 		LOGW("get_tbm_surface is failed");
@@ -831,7 +839,7 @@ int _mm_evas_renderer_make_flush_buffer (mm_evas_info *evas_info)
 
 	/* get src buffer info */
 	tbm_fmt = tbm_surface_get_format(src_tbm_surf);
-	src_bo = tbm_surface_internal_get_bo(src_tbm_surf, 0); //@@@ 0??
+	src_bo = tbm_surface_internal_get_bo(src_tbm_surf, 0);
 	src_size = tbm_bo_size(src_bo);
 	if (!src_bo || !src_size) {
 		LOGE("bo(%p), size(%d)", src_bo, src_size);
@@ -847,7 +855,7 @@ int _mm_evas_renderer_make_flush_buffer (mm_evas_info *evas_info)
 	}
 
 	/* get bo and size */
-	bo = tbm_surface_internal_get_bo(flush_buffer->tbm_surf, 0); //@@@ 0??
+	bo = tbm_surface_internal_get_bo(flush_buffer->tbm_surf, 0);
 	size = tbm_bo_size(bo);
 	if (!bo || !size)
 	{
