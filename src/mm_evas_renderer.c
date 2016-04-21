@@ -742,9 +742,11 @@ void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *resul
 		result->w = evas_info->dst_roi.w;
 		result->h = evas_info->dst_roi.h;
 
-		/* don't call evas_object_image_fill_set */
 		evas_object_move(evas_info->eo, result->x, result->y);
 		evas_object_resize(evas_info->eo, result->w, result->h);
+
+		/* don't call evas_object_image_fill_set based on content's resolution */
+		evas_object_image_fill_set(evas_info->eo, 0, 0, result->w, result->h);
 		break;
 	default:
 		LOGW("unsupported mode.");
