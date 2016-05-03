@@ -36,6 +36,14 @@
 #define LOG_TAG "MM_EVAS_RENDER"
 //#define _INTERNAL_DEBUG_ /* debug only */
 
+#if 0
+#define MMER_FENTER();					LOGD("<ENTER>");
+#define MMER_FLEAVE();					LOGD("<LEAVE>");
+#else
+#define MMER_FENTER();
+#define MMER_FLEAVE();
+#endif
+
 #define MM_CHECK_NULL( x_var ) \
 if ( ! x_var ) \
 { \
@@ -108,7 +116,9 @@ enum {
 };
 
 #ifdef _INTERNAL_DEBUG_
+int g_cnt = 0;
 void __print_idx(mm_evas_info *evas_info);
+int __dump_pkt(media_packet_h pkt);
 #endif
 /* internal */
 void _free_previous_packets(mm_evas_info *evas_info);
@@ -127,11 +137,12 @@ static void _mm_evas_renderer_unset_callback(mm_evas_info *evas_info);
 
 static void _evas_resize_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
 {
+	MMER_FENTER();
+
 	int x, y, w, h, ret;
 	x = y = w = h = 0;
 
 	mm_evas_info *evas_info = data;
-	LOGD("[ENTER]");
 
 	if (!evas_info || !evas_info->eo) {
 		return;
@@ -150,11 +161,13 @@ static void _evas_resize_cb(void *data, Evas *e, Evas_Object *obj, void *event_i
 		if (ret != MM_ERROR_NONE)
 			LOGW("fail to apply geometry info");
 	}
-	LOGD("[LEAVE]");
+	MMER_FLEAVE();
 }
 
 static void _evas_render_pre_cb(void *data, Evas *e, void *event_info)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = data;
 
 	if (!evas_info || !evas_info->eo) {
@@ -170,12 +183,15 @@ static void _evas_render_pre_cb(void *data, Evas *e, void *event_info)
 			LOGE("flushing packets are failed");
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
+	MMER_FLEAVE();
 }
 
 static void _evas_del_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = data;
-	LOGD("[ENTER]");
+
 	if (!evas_info || !evas_info->eo) {
 		return;
 	}
@@ -184,14 +200,14 @@ static void _evas_del_cb(void *data, Evas *e, Evas_Object *obj, void *event_info
 		evas_object_image_data_set(evas_info->eo, NULL);
 		evas_info->eo = NULL;
 	}
-	LOGD("[LEAVE]");
+	MMER_FLEAVE();
 }
 
 void _evas_pipe_cb(void *data, void *buffer, update_info info)
 {
-	mm_evas_info *evas_info = data;
+	MMER_FENTER();
 
-	LOGD("[ENTER]");
+	mm_evas_info *evas_info = data;
 
 	if (!evas_info) {
 		LOGW("evas_info is NULL", evas_info);
@@ -253,7 +269,7 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 		break;
 	}
 
-	Evas_Native_Surface surf;
+	Evas_Native_Surface surf = { 0 };
 	surf.type = EVAS_NATIVE_SURFACE_TBM;
 	surf.version = EVAS_NATIVE_SURFACE_VERSION;
 	surf.data.tbm.buffer = evas_info->pkt_info[cur_idx].tbm_surf;
@@ -262,7 +278,8 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 
 	rect_info result = { 0 };
 
-	evas_object_geometry_get(evas_info->eo, &evas_info->eo_size.x, &evas_info->eo_size.y, &evas_info->eo_size.w, &evas_info->eo_size.h);
+	evas_object_geometry_get(evas_info->eo, &evas_info->eo_size.x, &evas_info->eo_size.y,
+		&evas_info->eo_size.w, &evas_info->eo_size.h);
 	if (!evas_info->eo_size.w || !evas_info->eo_size.h) {
 		LOGE("there is no information for evas object size");
 		goto ERROR;
@@ -273,9 +290,15 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 		goto ERROR;
 	}
 
+	if (evas_info->update_needed) {
+		/* update geometry on pause state */
+		evas_object_image_native_surface_set(evas_info->eo, NULL);
+		evas_info->update_needed = FALSE;
+	}
+
 	if (evas_info->use_ratio) {
 		surf.data.tbm.ratio = (float) evas_info->w / evas_info->h;
-		LOGD("set ratio for letter mode");
+		LOGD("set ratio");
 	}
 	evas_object_size_hint_align_set(evas_info->eo, EVAS_HINT_FILL, EVAS_HINT_FILL);
 	evas_object_size_hint_weight_set(evas_info->eo, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
@@ -288,8 +311,7 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 	if (result.x || result.y)
 		LOGD("coordinate x, y (%d, %d) for locating video to center", result.x, result.y);
 
-	if (evas_info->display_geometry_method != DISP_GEO_METHOD_CUSTOM_ROI)
-		evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
+	evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
 
 	evas_object_image_pixels_dirty_set(evas_info->eo, EINA_TRUE);
 	LOGD("GEO_METHOD : src(%dx%d), dst(%dx%d), dst_x(%d), dst_y(%d), rotate(%d), flip(%d)", evas_info->w, evas_info->h, evas_info->eo_size.w, evas_info->eo_size.h, evas_info->eo_size.x, evas_info->eo_size.y, evas_info->rotate_angle, evas_info->flip);
@@ -298,9 +320,10 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 	if ((prev_idx != -1) && evas_info->pkt_info[prev_idx].packet && (prev_idx != cur_idx))
 		_free_previous_packets(evas_info);
 
-	LOGD("[LEAVE]");
 	g_mutex_unlock(&evas_info->idx_lock);
 	g_mutex_unlock(&evas_info->mp_lock);
+
+	MMER_FLEAVE();
 
 	return;
 
@@ -314,11 +337,11 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 }
 
 #ifdef _INTERNAL_DEBUG_
-void __print_idx(mm_evas_info *evas_info)
+void __print_idx (mm_evas_info *evas_info)
 {
 	gint prev_idx = evas_info->pkt_info[evas_info->cur_idx].prev;
 	LOGE("***** start cur_idx : %d -> prev_idx : %d", evas_info->cur_idx, prev_idx);
-	while(prev_idx != -1)
+	while (prev_idx != -1)
 	{
 		LOGE("***** cur_idx : %d -> prev_idx : %d", prev_idx, evas_info->pkt_info[prev_idx].prev);
 		prev_idx = evas_info->pkt_info[prev_idx].prev;
@@ -326,10 +349,34 @@ void __print_idx(mm_evas_info *evas_info)
 	LOGE("***** end");
 	return;
 }
+
+int __dump_pkt (media_packet_h pkt)
+{
+	void *data;
+	uint64_t buf_size;
+	char filename[100] = {0};
+	FILE *fp = NULL;
+
+	sprintf(filename, "/tmp/DUMP_IMG_%2.2d.dump", g_cnt);
+	fp = fopen(filename, "wb");
+	if (fp == NULL)
+		return 1;
+
+	LOGW("DUMP IMG_%2.2d", g_cnt);
+	media_packet_get_buffer_data_ptr(pkt, &data);
+	media_packet_get_buffer_size(pkt, &buf_size);
+	LOGW("input data : %p, size %d\n", data, (int)buf_size);
+	fwrite(data, (int)buf_size, 1, fp);
+	fclose(fp);
+
+	return 0;
+}
 #endif
 
 void _free_previous_packets(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	gint index = evas_info->cur_idx;
 	gint prev_idx = evas_info->pkt_info[index].prev;
 
@@ -348,11 +395,16 @@ void _free_previous_packets(mm_evas_info *evas_info)
 		prev_idx = evas_info->pkt_info[prev_idx].prev;
 		LOGD("sent packet %d", evas_info->sent_buffer_cnt);
 	}
+
+	MMER_FLEAVE();
+
 	return;
 }
 
 static int _get_video_size(media_packet_h packet, mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	media_format_h fmt;
 	if (media_packet_get_format(packet, &fmt) == MEDIA_PACKET_ERROR_NONE) {
 		int w, h;
@@ -368,11 +420,16 @@ static int _get_video_size(media_packet_h packet, mm_evas_info *evas_info)
 	} else {
 		LOGW("media_packet_get_format is failed");
 	}
+
+	MMER_FLEAVE();
+
 	return false;
 }
 
 int _find_empty_index(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	int i;
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
 		if (!evas_info->pkt_info[i].packet) {
@@ -382,11 +439,15 @@ int _find_empty_index(mm_evas_info *evas_info)
 	}
 	LOGE("there is no empty idx");
 
+	MMER_FLEAVE();
+
 	return -1;
 }
 
 int _flush_packets(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	int ret_mp = MEDIA_PACKET_ERROR_NONE;
 	int i = 0;
@@ -395,9 +456,11 @@ int _flush_packets(mm_evas_info *evas_info)
 		LOGW("there is no esink info");
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
-	/* update the screen only if visible is ture */
-	if (evas_info->keep_screen && (evas_info->visible != VISIBLE_FALSE)) {
-		Evas_Native_Surface surf;
+
+	/* update the screen only if visible is true */
+	/* if flush buffer is null, we cant keep screen */
+	if (evas_info->keep_screen && (evas_info->visible != VISIBLE_FALSE) && evas_info->flush_buffer) {
+		Evas_Native_Surface surf = { 0 };
 		rect_info result = { 0 };
 		evas_object_geometry_get(evas_info->eo, &evas_info->eo_size.x, &evas_info->eo_size.y, &evas_info->eo_size.w, &evas_info->eo_size.h);
 		if (!evas_info->eo_size.w || !evas_info->eo_size.h) {
@@ -412,7 +475,7 @@ int _flush_packets(mm_evas_info *evas_info)
 
 		if (evas_info->use_ratio) {
 			surf.data.tbm.ratio = (float) evas_info->w / evas_info->h;
-			LOGD("set ratio for letter mode");
+			LOGD("set ratio");
 		}
 		evas_object_size_hint_align_set(evas_info->eo, EVAS_HINT_FILL, EVAS_HINT_FILL);
 		evas_object_size_hint_weight_set(evas_info->eo, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
@@ -422,8 +485,7 @@ int _flush_packets(mm_evas_info *evas_info)
 		if (result.x || result.y)
 			LOGD("coordinate x, y (%d, %d) for locating video to center", result.x, result.y);
 
-		if (evas_info->display_geometry_method != DISP_GEO_METHOD_CUSTOM_ROI)
-			evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
+		evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
 
 		/* set flush buffer */
 		surf.type = EVAS_NATIVE_SURFACE_TBM;
@@ -467,6 +529,8 @@ int _flush_packets(mm_evas_info *evas_info)
 
 	evas_object_image_pixels_dirty_set (evas_info->eo, EINA_TRUE);
 	evas_info->retrieve_packet = FALSE;
+
+	MMER_FLEAVE();
 
 	return ret;
 }
@@ -523,22 +587,28 @@ int _reset_pipe(mm_evas_info *evas_info)
 
 static void _mm_evas_renderer_set_callback(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
 	if (evas_info->eo) {
 		SET_EVAS_OBJECT_EVENT_CALLBACK(evas_info->eo, evas_info);
 		SET_EVAS_EVENT_CALLBACK(evas_object_evas_get(evas_info->eo), evas_info);
 	}
+	MMER_FLEAVE();
 }
 
 static void _mm_evas_renderer_unset_callback(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
 	if (evas_info->eo) {
 		UNSET_EVAS_OBJECT_EVENT_CALLBACK(evas_info->eo);
 		UNSET_EVAS_EVENT_CALLBACK(evas_object_evas_get(evas_info->eo));
 	}
+	MMER_FLEAVE();
 }
 
 int _mm_evas_renderer_create(mm_evas_info **evas_info)
 {
+	MMER_FENTER();
+
 	mm_evas_info *ptr = NULL;
 	ptr = g_malloc0(sizeof(mm_evas_info));
 
@@ -552,6 +622,8 @@ int _mm_evas_renderer_create(mm_evas_info **evas_info)
 	g_mutex_init(&ptr->mp_lock);
 	g_mutex_init(&ptr->idx_lock);
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 
  ERROR:
@@ -561,6 +633,8 @@ int _mm_evas_renderer_create(mm_evas_info **evas_info)
 
 int _mm_evas_renderer_destroy(mm_evas_info **evas_info)
 {
+	MMER_FENTER();
+
 	mm_evas_info *ptr = (mm_evas_info *)*evas_info;
 	MM_CHECK_NULL(ptr);
 	int ret = MM_ERROR_NONE;
@@ -574,11 +648,14 @@ int _mm_evas_renderer_destroy(mm_evas_info **evas_info)
 	g_free(ptr);
 	ptr = NULL;
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(evas_info);
 	MM_CHECK_NULL(eo);
 	g_mutex_lock(&evas_info->idx_lock);
@@ -607,11 +684,14 @@ int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo)
 
 	g_mutex_unlock(&evas_info->idx_lock);
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(evas_info);
 	g_mutex_lock(&evas_info->idx_lock);
 
@@ -662,11 +742,15 @@ int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 
 	g_mutex_unlock(&evas_info->idx_lock);
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *result)
 {
+	MMER_FENTER();
+
 	if (!evas_info || !evas_info->eo) {
 		LOGW("there is no evas_info or evas object");
 		return;
@@ -736,25 +820,25 @@ void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *resul
 		break;
 	case DISP_GEO_METHOD_CUSTOM_ROI:
 		LOGD("custom roi mode");
-		evas_info->use_ratio= FALSE;
+		evas_info->use_ratio= TRUE;
 		result->x = evas_info->dst_roi.x;
 		result->y = evas_info->dst_roi.y;
 		result->w = evas_info->dst_roi.w;
 		result->h = evas_info->dst_roi.h;
-
-		/* don't call evas_object_image_fill_set */
-		evas_object_move(evas_info->eo, result->x, result->y);
-		evas_object_resize(evas_info->eo, result->w, result->h);
 		break;
 	default:
 		LOGW("unsupported mode.");
 		break;
 	}
 	LOGD("geometry result [%d, %d, %d, %d]", result->x, result->y, result->w, result->h);
+
+	MMER_FLEAVE();
 }
 
 int _mm_evas_renderer_apply_geometry(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	if (!evas_info || !evas_info->eo) {
 		LOGW("there is no evas_info or evas object");
 		return MM_ERROR_NONE;
@@ -773,23 +857,26 @@ int _mm_evas_renderer_apply_geometry(mm_evas_info *evas_info)
 
 		if (evas_info->use_ratio) {
 			surf->data.tbm.ratio = (float) evas_info->w / evas_info->h;
-			LOGD("set ratio for letter mode");
+			LOGD("set ratio");
 		}
-
 		if (result.x || result.y)
 			LOGD("coordinate x, y (%d, %d) for locating video to center", result.x, result.y);
 
-		if (evas_info->display_geometry_method != DISP_GEO_METHOD_CUSTOM_ROI)
-			evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
+		evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
+
 		return MM_ERROR_NONE;
 	} else
 		LOGW("there is no surf");
 	/* FIXME: before pipe_cb is invoked, apply_geometry can be called. */
+
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int _mm_evas_renderer_retrieve_all_packets(mm_evas_info *evas_info, bool keep_screen)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(evas_info);
 
 	int ret = MM_ERROR_NONE;
@@ -818,12 +905,16 @@ int _mm_evas_renderer_retrieve_all_packets(mm_evas_info *evas_info, bool keep_sc
 	}
 	g_mutex_unlock(&evas_info->idx_lock);
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 /* make buffer for copying */
 int _mm_evas_renderer_make_flush_buffer (mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	if (evas_info->cur_idx == -1) {
 		LOGW("there is no remained buffer");
 		return MM_ERROR_INVALID_ARGUMENT;
@@ -911,11 +1002,13 @@ int _mm_evas_renderer_make_flush_buffer (mm_evas_info *evas_info)
 
 	evas_info->flush_buffer = flush_buffer;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 
 ERROR:
 	if (flush_buffer) {
-		if(flush_buffer->tbm_surf)
+		if (flush_buffer->tbm_surf)
 		{
 			tbm_surface_destroy(flush_buffer->tbm_surf);
 			flush_buffer->tbm_surf = NULL;
@@ -930,6 +1023,8 @@ ERROR:
 /* release flush buffer */
 void _mm_evas_renderer_release_flush_buffer (mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	LOGW("release FLUSH BUFFER start");
 	if (evas_info->flush_buffer->bo) {
 		evas_info->flush_buffer->bo = NULL;
@@ -944,11 +1039,15 @@ void _mm_evas_renderer_release_flush_buffer (mm_evas_info *evas_info)
 	free(evas_info->flush_buffer);
 	evas_info->flush_buffer = NULL;
 
+	MMER_FLEAVE();
+
 	return;
 }
 
 void mm_evas_renderer_write(media_packet_h packet, void *data)
 {
+	MMER_FENTER();
+
 	if (!packet) {
 		LOGE("packet %p is NULL", packet);
 		return;
@@ -999,7 +1098,16 @@ void mm_evas_renderer_write(media_packet_h packet, void *data)
 		if (index == -1) {
 			goto ERROR;
 		}
-
+#ifdef _INTERNAL_DEBUG_
+		int ret2 = 0;
+		if ((g_cnt%10==0) && g_cnt<500) {
+			ret2 = __dump_pkt(packet);
+		}
+		if (ret2) {
+			LOGW ("__dump_pkt() is failed");
+		} else
+			g_cnt++;
+#endif
 		/* save previous index */
 		handle->pkt_info[index].prev = handle->cur_idx;
 		handle->pkt_info[index].packet = packet;
@@ -1024,6 +1132,8 @@ void mm_evas_renderer_write(media_packet_h packet, void *data)
 	}
 	g_mutex_unlock(&handle->idx_lock);
 
+	MMER_FLEAVE();
+
 	return;
 ERROR:
 	g_mutex_unlock(&handle->idx_lock);
@@ -1042,6 +1152,8 @@ INVALID_PARAM:
 
 int mm_evas_renderer_update_param(MMHandleType handle)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1065,10 +1177,9 @@ int mm_evas_renderer_update_param(MMHandleType handle)
 			if (!ret) {
 				LOGW("fail to ecore_pipe_write() for updating visibility\n");
 				return MM_ERROR_UNKNOWN;
-			} else
-				ret = MM_ERROR_NONE;
-
-#if 0		/* FIXME: pause state only */
+			}
+			evas_info->update_needed = TRUE;
+			/* FIXME: pause state only */
 			g_mutex_lock(&evas_info->idx_lock);
 			ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
 			if (!ret) {
@@ -1078,15 +1189,17 @@ int mm_evas_renderer_update_param(MMHandleType handle)
 				ret = MM_ERROR_NONE;
 			}
 			g_mutex_unlock(&evas_info->idx_lock);
-#endif
 		}
 	}
+
+	MMER_FLEAVE();
 
 	return ret;
 }
 
 int mm_evas_renderer_create(MMHandleType *handle, Evas_Object *eo)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(handle);
 
 	int ret = MM_ERROR_NONE;
@@ -1112,6 +1225,7 @@ int mm_evas_renderer_create(MMHandleType *handle, Evas_Object *eo)
 
 int mm_evas_renderer_destroy(MMHandleType *handle)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(handle);
 
 	int ret = MM_ERROR_NONE;
@@ -1129,11 +1243,15 @@ int mm_evas_renderer_destroy(MMHandleType *handle)
 	}
 	*handle = NULL;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_visible(MMHandleType handle, bool visible)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1159,11 +1277,15 @@ int mm_evas_renderer_set_visible(MMHandleType handle, bool visible)
 		LOGW("there is no epipe. we cant update it");
 	}
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int mm_evas_renderer_get_visible(MMHandleType handle, bool *visible)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1176,36 +1298,46 @@ int mm_evas_renderer_get_visible(MMHandleType handle, bool *visible)
 	else
 		*visible = TRUE;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_rotation(MMHandleType handle, int rotate)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
+	guint value;
 
 	if (!evas_info) {
 		LOGW("skip it. it is not evas surface type or handle is not prepared");
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
 
-	switch(rotate) {
+	switch (rotate) {
 	case DEGREE_0:
-		evas_info->rotate_angle = EVAS_IMAGE_ORIENT_0;
+		value = EVAS_IMAGE_ORIENT_0;
 		break;
 	case DEGREE_90:
-		evas_info->rotate_angle = EVAS_IMAGE_ORIENT_90;
+		value = EVAS_IMAGE_ORIENT_90;
 		break;
 	case DEGREE_180:
-		evas_info->rotate_angle = EVAS_IMAGE_ORIENT_180;
+		value = EVAS_IMAGE_ORIENT_180;
 		break;
 	case DEGREE_270:
-		evas_info->rotate_angle = EVAS_IMAGE_ORIENT_270;
+		value = EVAS_IMAGE_ORIENT_270;
 		break;
 	default:
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
-#if 0	/* FIXME: pause state only */
+	if (evas_info->rotate_angle != value) {
+		evas_info->update_needed = TRUE;
+		evas_info->rotate_angle = value;
+	}
+
+	/* FIXME: pause state only */
 	if (evas_info->epipe) {
 		g_mutex_lock(&evas_info->idx_lock);
 		ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
@@ -1217,12 +1349,15 @@ int mm_evas_renderer_set_rotation(MMHandleType handle, int rotate)
 		}
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
-#endif
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int mm_evas_renderer_get_rotation(MMHandleType handle, int *rotate)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1230,7 +1365,7 @@ int mm_evas_renderer_get_rotation(MMHandleType handle, int *rotate)
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
 
-	switch(evas_info->rotate_angle) {
+	switch (evas_info->rotate_angle) {
 	case EVAS_IMAGE_ORIENT_0:
 		*rotate = DEGREE_0;
 		break;
@@ -1247,11 +1382,15 @@ int mm_evas_renderer_get_rotation(MMHandleType handle, int *rotate)
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_geometry(MMHandleType handle, int mode)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1259,12 +1398,13 @@ int mm_evas_renderer_set_geometry(MMHandleType handle, int mode)
 		LOGW("skip it. it is not evas surface type or handle is not prepared");
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
-
-	evas_info->display_geometry_method = mode;
-	ret = _mm_evas_renderer_apply_geometry(evas_info);
+	if (evas_info->display_geometry_method != mode) {
+		evas_info->update_needed = TRUE;
+		evas_info->display_geometry_method = mode;
+	}
 
 	/* ecore_pipe_write is needed, because of setting ratio for letterbox mode */
-#if 0	/* FIXME: pause state only */
+	/* FIXME: pause state only */
 	if (evas_info->epipe) {
 		g_mutex_lock(&evas_info->idx_lock);
 		ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
@@ -1276,13 +1416,15 @@ int mm_evas_renderer_set_geometry(MMHandleType handle, int mode)
 		}
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
-#endif
+	MMER_FLEAVE();
 
 	return ret;
 }
 
 int mm_evas_renderer_get_geometry(MMHandleType handle, int *mode)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1291,11 +1433,15 @@ int mm_evas_renderer_get_geometry(MMHandleType handle, int *mode)
 	}
 	*mode = evas_info->display_geometry_method;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_roi_area(MMHandleType handle, int x, int y, int w, int h)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1309,18 +1455,36 @@ int mm_evas_renderer_set_roi_area(MMHandleType handle, int x, int y, int w, int 
 	}
 
 	/* display mode is set to DISP_GEO_METHOD_CUSTOM_ROI internally */
+	if (evas_info->display_geometry_method != DISP_GEO_METHOD_CUSTOM_ROI)
+		evas_info->update_needed = TRUE;
 	evas_info->display_geometry_method = DISP_GEO_METHOD_CUSTOM_ROI;
 	evas_info->dst_roi.x = x;
 	evas_info->dst_roi.y = y;
 	evas_info->dst_roi.w = w;
 	evas_info->dst_roi.h = h;
-	ret = _mm_evas_renderer_apply_geometry(evas_info);
+
+	/* pipe_write could be needed because ratio can be changed on pause state */
+	if (evas_info->epipe) {
+		g_mutex_lock(&evas_info->idx_lock);
+		ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
+		if (!ret) {
+			LOGW("fail to ecore_pipe_write() for updating visibility\n");
+			ret = MM_ERROR_UNKNOWN;
+		} else {
+			ret = MM_ERROR_NONE;
+		}
+		g_mutex_unlock(&evas_info->idx_lock);
+	}
+
+	MMER_FLEAVE();
 
 	return ret;
 }
 
 int mm_evas_renderer_get_roi_area(MMHandleType handle, int *x, int *y, int *w, int *h)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1337,36 +1501,46 @@ int mm_evas_renderer_get_roi_area(MMHandleType handle, int *x, int *y, int *w, i
 	*w = evas_info->dst_roi.w;
 	*h = evas_info->dst_roi.h;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_flip(MMHandleType handle, int flip)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
+	guint value;
 
 	if (!evas_info) {
 		LOGW("skip it. it is not evas surface type or handle is not prepared");
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
 
-	switch(flip) {
+	switch (flip) {
 	case FLIP_NONE :
-		evas_info->flip = EVAS_IMAGE_ORIENT_NONE;
+		value = EVAS_IMAGE_ORIENT_NONE;
 		break;
 	case FLIP_HORIZONTAL:
-		evas_info->flip = EVAS_IMAGE_FLIP_HORIZONTAL;
+		value = EVAS_IMAGE_FLIP_HORIZONTAL;
 		break;
 	case FLIP_VERTICAL:
-		evas_info->flip = EVAS_IMAGE_FLIP_VERTICAL;
+		value = EVAS_IMAGE_FLIP_VERTICAL;
 		break;
 	case FLIP_BOTH:
-		evas_info->flip = EVAS_IMAGE_ORIENT_180;
+		value = EVAS_IMAGE_ORIENT_180;
 		break;
 	default:
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
-#if 0	/* FIXME: pause state only */
+	if (evas_info->flip != value) {
+		evas_info->update_needed = TRUE;
+		evas_info->flip = value;
+	}
+
+	/* FIXME: pause state only */
 	if (evas_info->epipe) {
 		g_mutex_lock(&evas_info->idx_lock);
 		ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
@@ -1378,12 +1552,16 @@ int mm_evas_renderer_set_flip(MMHandleType handle, int flip)
 		}
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
-#endif
+
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int mm_evas_renderer_get_flip(MMHandleType handle, int *flip)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1391,7 +1569,7 @@ int mm_evas_renderer_get_flip(MMHandleType handle, int *flip)
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
 
-	switch(evas_info->flip) {
+	switch (evas_info->flip) {
 	case EVAS_IMAGE_ORIENT_NONE:
 		*flip = FLIP_NONE;
 		break;
@@ -1408,11 +1586,15 @@ int mm_evas_renderer_get_flip(MMHandleType handle, int *flip)
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_retrieve_all_packets (MMHandleType handle, bool keep_screen)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info*) handle;
 
@@ -1421,6 +1603,8 @@ int mm_evas_renderer_retrieve_all_packets (MMHandleType handle, bool keep_screen
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
 	ret = _mm_evas_renderer_retrieve_all_packets(evas_info, keep_screen);
+
+	MMER_FLEAVE();
 
 	return ret;
 }
