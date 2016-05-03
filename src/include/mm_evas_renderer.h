@@ -87,6 +87,16 @@ typedef struct {
 	tbm_surface_h tbm_surf;
 } flush_info;
 
+typedef struct {
+	struct {
+		Eina_Bool use_roi; /**< roi(region of interest) to use (true, false)  */
+		unsigned int x, y, w, h; /**< x, y, width, height position of the source image on the surface  */
+	} roi; /**< Set this struct fields if roi(region of interest) to use  */
+	int rot; /**< rotation (EVAS_IMAGE_ORIENT_NONE, EVAS_IMAGE_ORIENT_90, EVAS_IMAGE_ORIENT_180, EVAS_IMAGE_ORIENT_270)  */
+	float ratio; /**< width/height ratio of the source image  */
+	int flip; /**< flip (EVAS_IMAGE_FLIP_HORIZONTAL:horizontal, EVAS_IMAGE_FLIP_VERTICAL:vertical)  */
+} surf_info;
+
 /* evas info for evas surface type */
 typedef struct {
 	Evas_Object *eo;
@@ -97,15 +107,13 @@ typedef struct {
 	gint h;
 
 	/* properties */
+	gboolean update_needed; /* to update geometry information on pause state */
 	visible_info visible;
 	rect_info eo_size;
-	rect_info dst_roi;
-	gboolean use_ratio;
-	guint rotate_angle;
 	guint display_geometry_method;
-	guint flip;
 
 	tbm_surface_h tbm_surf;
+	surf_info *extention; /* to set rotation, flip, ratio, roi options */
 
 	/* media packet */
 	packet_info pkt_info[MAX_PACKET_NUM];

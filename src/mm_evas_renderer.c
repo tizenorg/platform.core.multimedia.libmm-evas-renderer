@@ -253,16 +253,15 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 		break;
 	}
 
-	Evas_Native_Surface surf;
+	Evas_Native_Surface surf = { 0 };
 	surf.type = EVAS_NATIVE_SURFACE_TBM;
 	surf.version = EVAS_NATIVE_SURFACE_VERSION;
 	surf.data.tbm.buffer = evas_info->pkt_info[cur_idx].tbm_surf;
-	surf.data.tbm.rot = evas_info->rotate_angle;
-	surf.data.tbm.flip = evas_info->flip;
 
 	rect_info result = { 0 };
 
-	evas_object_geometry_get(evas_info->eo, &evas_info->eo_size.x, &evas_info->eo_size.y, &evas_info->eo_size.w, &evas_info->eo_size.h);
+	evas_object_geometry_get(evas_info->eo, &evas_info->eo_size.x, &evas_info->eo_size.y,
+		&evas_info->eo_size.w, &evas_info->eo_size.h);
 	if (!evas_info->eo_size.w || !evas_info->eo_size.h) {
 		LOGE("there is no information for evas object size");
 		goto ERROR;
@@ -272,10 +271,11 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 		LOGE("no information about geometry (%d, %d)", result.w, result.h);
 		goto ERROR;
 	}
+	surf.data.tbm.extention = evas_info->extention;
 
-	if (evas_info->use_ratio) {
-		surf.data.tbm.ratio = (float) evas_info->w / evas_info->h;
-		LOGD("set ratio for letter mode");
+	if(evas_info->update_needed) {
+		evas_object_image_native_surface_set(evas_info->eo, NULL);
+		evas_info->update_needed = FALSE;
 	}
 	evas_object_size_hint_align_set(evas_info->eo, EVAS_HINT_FILL, EVAS_HINT_FILL);
 	evas_object_size_hint_weight_set(evas_info->eo, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
@@ -287,12 +287,12 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 
 	if (result.x || result.y)
 		LOGD("coordinate x, y (%d, %d) for locating video to center", result.x, result.y);
-
-	if (evas_info->display_geometry_method != DISP_GEO_METHOD_CUSTOM_ROI)
-		evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
+	evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
 
 	evas_object_image_pixels_dirty_set(evas_info->eo, EINA_TRUE);
-	LOGD("GEO_METHOD : src(%dx%d), dst(%dx%d), dst_x(%d), dst_y(%d), rotate(%d), flip(%d)", evas_info->w, evas_info->h, evas_info->eo_size.w, evas_info->eo_size.h, evas_info->eo_size.x, evas_info->eo_size.y, evas_info->rotate_angle, evas_info->flip);
+	LOGD("GEO_METHOD : src(%dx%d), dst(%dx%d), dst_x(%d), dst_y(%d), rotate(%d), flip(%d)",
+		evas_info->w, evas_info->h, evas_info->eo_size.w, evas_info->eo_size.h,
+		evas_info->eo_size.x, evas_info->eo_size.y, evas_info->extention->rot, evas_info->extention->flip);
 
 	/* when _evas_pipe_cb is called sequentially, previous packet and current packet will be the same */
 	if ((prev_idx != -1) && evas_info->pkt_info[prev_idx].packet && (prev_idx != cur_idx))
@@ -397,7 +397,7 @@ int _flush_packets(mm_evas_info *evas_info)
 	}
 	/* update the screen only if visible is ture */
 	if (evas_info->keep_screen && (evas_info->visible != VISIBLE_FALSE)) {
-		Evas_Native_Surface surf;
+		Evas_Native_Surface surf = { 0 };
 		rect_info result = { 0 };
 		evas_object_geometry_get(evas_info->eo, &evas_info->eo_size.x, &evas_info->eo_size.y, &evas_info->eo_size.w, &evas_info->eo_size.h);
 		if (!evas_info->eo_size.w || !evas_info->eo_size.h) {
@@ -410,10 +410,6 @@ int _flush_packets(mm_evas_info *evas_info)
 			return MM_ERROR_INVALID_ARGUMENT;
 		}
 
-		if (evas_info->use_ratio) {
-			surf.data.tbm.ratio = (float) evas_info->w / evas_info->h;
-			LOGD("set ratio for letter mode");
-		}
 		evas_object_size_hint_align_set(evas_info->eo, EVAS_HINT_FILL, EVAS_HINT_FILL);
 		evas_object_size_hint_weight_set(evas_info->eo, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
 		if (evas_info->w > 0 && evas_info->h > 0)
@@ -421,19 +417,17 @@ int _flush_packets(mm_evas_info *evas_info)
 
 		if (result.x || result.y)
 			LOGD("coordinate x, y (%d, %d) for locating video to center", result.x, result.y);
-
-		if (evas_info->display_geometry_method != DISP_GEO_METHOD_CUSTOM_ROI)
-			evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
+		evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
 
 		/* set flush buffer */
 		surf.type = EVAS_NATIVE_SURFACE_TBM;
 		surf.version = EVAS_NATIVE_SURFACE_VERSION;
 		surf.data.tbm.buffer = evas_info->flush_buffer->tbm_surf;
-		surf.data.tbm.rot = evas_info->rotate_angle;
-		surf.data.tbm.flip = evas_info->flip;
+		surf.data.tbm.extention = evas_info->extention;
+
 		evas_object_image_native_surface_set(evas_info->eo, &surf);
 
-		LOGD("flush_buffer surf(%p), rotate(%d), flip(%d)", evas_info->flush_buffer->tbm_surf, evas_info->rotate_angle, evas_info->flip);
+		LOGD("flush_buffer surf(%p), rotate(%d), flip(%d)", evas_info->flush_buffer->tbm_surf, evas_info->extention->rot, evas_info->extention->flip);
 	} else {
 		/* unset evas native surface for displaying black screen */
 		evas_object_image_native_surface_set (evas_info->eo, NULL);
@@ -590,8 +584,9 @@ int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo)
 		evas_info->pkt_info[i].tbm_surf = NULL;
 		evas_info->pkt_info[i].prev = -1;
 	}
+	evas_info->extention = g_malloc0(sizeof(surf_info));
+	memset(evas_info->extention, 0x0, sizeof(surf_info));
 	evas_info->cur_idx = -1;
-	evas_info->dst_roi.x = evas_info->dst_roi.y = evas_info->dst_roi.w = evas_info->dst_roi.h = 0;
 	evas_info->eo = eo;
 	evas_info->epipe = ecore_pipe_add((Ecore_Pipe_Cb) _evas_pipe_cb, evas_info);
 	if (!evas_info->epipe) {
@@ -631,8 +626,8 @@ int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 	}
 
 	evas_info->eo_size.x = evas_info->eo_size.y = evas_info->eo_size.w = evas_info->eo_size.h = 0;
-	evas_info->dst_roi.x = evas_info->dst_roi.y = evas_info->dst_roi.w = evas_info->dst_roi.h = 0;
 	evas_info->w = evas_info->h = 0;
+	g_free(evas_info->extention);
 
 	if (evas_info->flush_buffer)
 		_mm_evas_renderer_release_flush_buffer(evas_info);
@@ -683,13 +678,15 @@ void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *resul
 	case DISP_GEO_METHOD_LETTER_BOX:
 		/* set black padding for letter box mode */
 		LOGD("letter box mode");
-		evas_info->use_ratio = TRUE;
+		evas_info->extention->ratio = (float) evas_info->w / evas_info->h;
+		evas_info->extention->roi.use_roi = EINA_FALSE;
 		result->w = evas_info->eo_size.w;
 		result->h = evas_info->eo_size.h;
 		break;
 	case DISP_GEO_METHOD_ORIGIN_SIZE:
 		LOGD("origin size mode");
-		evas_info->use_ratio = FALSE;
+		evas_info->extention->ratio = 0;
+		evas_info->extention->roi.use_roi = EINA_FALSE;
 		/* set coordinate for each case */
 		result->x = (evas_info->eo_size.w - evas_info->w) / 2;
 		result->y = (evas_info->eo_size.h - evas_info->h) / 2;
@@ -698,13 +695,15 @@ void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *resul
 		break;
 	case DISP_GEO_METHOD_FULL_SCREEN:
 		LOGD("full screen mode");
-		evas_info->use_ratio = FALSE;
+		evas_info->extention->ratio = 0;
+		evas_info->extention->roi.use_roi = EINA_FALSE;
 		result->w = evas_info->eo_size.w;
 		result->h = evas_info->eo_size.h;
 		break;
 	case DISP_GEO_METHOD_CROPPED_FULL_SCREEN:
 		LOGD("cropped full screen mode");
-		evas_info->use_ratio = FALSE;
+		evas_info->extention->ratio = 0;
+		evas_info->extention->roi.use_roi = EINA_FALSE;
 		/* compare evas object's ratio with video's */
 		if ((evas_info->eo_size.w / evas_info->eo_size.h) > (evas_info->w / evas_info->h)) {
 			result->w = evas_info->eo_size.w;
@@ -718,10 +717,11 @@ void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *resul
 		break;
 	case DISP_GEO_METHOD_ORIGIN_SIZE_OR_LETTER_BOX:
 		LOGD("origin size or letter box mode");
+		evas_info->extention->roi.use_roi = EINA_FALSE;
 		/* if video size is smaller than evas object's, it will be set to origin size mode */
 		if ((evas_info->eo_size.w > evas_info->w) && (evas_info->eo_size.h > evas_info->h)) {
 			LOGD("origin size mode");
-			evas_info->use_ratio = FALSE;
+			evas_info->extention->ratio = 0;
 			/* set coordinate for each case */
 			result->x = (evas_info->eo_size.w - evas_info->w) / 2;
 			result->y = (evas_info->eo_size.h - evas_info->h) / 2;
@@ -729,22 +729,19 @@ void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *resul
 			result->h = evas_info->h;
 		} else {
 			LOGD("letter box mode");
-			evas_info->use_ratio = TRUE;
+			evas_info->extention->ratio = (float) evas_info->w / evas_info->h;
 			result->w = evas_info->eo_size.w;
 			result->h = evas_info->eo_size.h;
 		}
 		break;
 	case DISP_GEO_METHOD_CUSTOM_ROI:
 		LOGD("custom roi mode");
-		evas_info->use_ratio= FALSE;
-		result->x = evas_info->dst_roi.x;
-		result->y = evas_info->dst_roi.y;
-		result->w = evas_info->dst_roi.w;
-		result->h = evas_info->dst_roi.h;
-
-		/* don't call evas_object_image_fill_set */
-		evas_object_move(evas_info->eo, result->x, result->y);
-		evas_object_resize(evas_info->eo, result->w, result->h);
+		evas_info->extention->ratio = 0;
+		evas_info->extention->roi.use_roi = EINA_TRUE;
+		result->x = evas_info->extention->roi.x;
+		result->y = evas_info->extention->roi.y;
+		result->w = evas_info->extention->roi.w;
+		result->h = evas_info->extention->roi.h;
 		break;
 	default:
 		LOGW("unsupported mode.");
@@ -765,22 +762,13 @@ int _mm_evas_renderer_apply_geometry(mm_evas_info *evas_info)
 
 	if (surf) {
 		LOGD("native surface exists");
-		surf->data.tbm.rot = evas_info->rotate_angle;
-		surf->data.tbm.flip = evas_info->flip;
-		evas_object_image_native_surface_set(evas_info->eo, surf);
-
 		_mm_evas_renderer_update_geometry(evas_info, &result);
-
-		if (evas_info->use_ratio) {
-			surf->data.tbm.ratio = (float) evas_info->w / evas_info->h;
-			LOGD("set ratio for letter mode");
-		}
+		evas_object_image_native_surface_set(evas_info->eo, surf);
 
 		if (result.x || result.y)
 			LOGD("coordinate x, y (%d, %d) for locating video to center", result.x, result.y);
+		evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
 
-		if (evas_info->display_geometry_method != DISP_GEO_METHOD_CUSTOM_ROI)
-			evas_object_image_fill_set(evas_info->eo, result.x, result.y, result.w, result.h);
 		return MM_ERROR_NONE;
 	} else
 		LOGW("there is no surf");
@@ -1054,7 +1042,7 @@ int mm_evas_renderer_update_param(MMHandleType handle)
 	if (evas_info) {
 		LOGD("set video param : evas-object %x, method %d", evas_info->eo, evas_info->display_geometry_method);
 		LOGD("set video param : visible %d", evas_info->visible);
-		LOGD("set video param : rotate %d", evas_info->rotate_angle);
+		LOGD("set video param : rotate %d", evas_info->extention->rot);
 
 		ret = _mm_evas_renderer_apply_geometry(evas_info);
 		if (ret != MM_ERROR_NONE)
@@ -1065,10 +1053,9 @@ int mm_evas_renderer_update_param(MMHandleType handle)
 			if (!ret) {
 				LOGW("fail to ecore_pipe_write() for updating visibility\n");
 				return MM_ERROR_UNKNOWN;
-			} else
-				ret = MM_ERROR_NONE;
-
-#if 0		/* FIXME: pause state only */
+			}
+			evas_info->update_needed = TRUE;
+			/* FIXME: pause state only */
 			g_mutex_lock(&evas_info->idx_lock);
 			ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
 			if (!ret) {
@@ -1078,7 +1065,6 @@ int mm_evas_renderer_update_param(MMHandleType handle)
 				ret = MM_ERROR_NONE;
 			}
 			g_mutex_unlock(&evas_info->idx_lock);
-#endif
 		}
 	}
 
@@ -1183,6 +1169,7 @@ int mm_evas_renderer_set_rotation(MMHandleType handle, int rotate)
 {
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
+	guint value;
 
 	if (!evas_info) {
 		LOGW("skip it. it is not evas surface type or handle is not prepared");
@@ -1191,21 +1178,25 @@ int mm_evas_renderer_set_rotation(MMHandleType handle, int rotate)
 
 	switch(rotate) {
 	case DEGREE_0:
-		evas_info->rotate_angle = EVAS_IMAGE_ORIENT_0;
+		value = EVAS_IMAGE_ORIENT_0;
 		break;
 	case DEGREE_90:
-		evas_info->rotate_angle = EVAS_IMAGE_ORIENT_90;
+		value = EVAS_IMAGE_ORIENT_90;
 		break;
 	case DEGREE_180:
-		evas_info->rotate_angle = EVAS_IMAGE_ORIENT_180;
+		value = EVAS_IMAGE_ORIENT_180;
 		break;
 	case DEGREE_270:
-		evas_info->rotate_angle = EVAS_IMAGE_ORIENT_270;
+		value = EVAS_IMAGE_ORIENT_270;
 		break;
 	default:
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
-#if 0	/* FIXME: pause state only */
+	if (evas_info->extention->rot != value)
+		evas_info->update_needed = TRUE;
+	evas_info->extention->rot = value;
+
+	/* FIXME: pause state only */
 	if (evas_info->epipe) {
 		g_mutex_lock(&evas_info->idx_lock);
 		ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
@@ -1217,7 +1208,7 @@ int mm_evas_renderer_set_rotation(MMHandleType handle, int rotate)
 		}
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
-#endif
+
 	return ret;
 }
 
@@ -1230,7 +1221,7 @@ int mm_evas_renderer_get_rotation(MMHandleType handle, int *rotate)
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
 
-	switch(evas_info->rotate_angle) {
+	switch(evas_info->extention->rot) {
 	case EVAS_IMAGE_ORIENT_0:
 		*rotate = DEGREE_0;
 		break;
@@ -1259,12 +1250,12 @@ int mm_evas_renderer_set_geometry(MMHandleType handle, int mode)
 		LOGW("skip it. it is not evas surface type or handle is not prepared");
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
-
+	if (evas_info->display_geometry_method != mode)
+		evas_info->update_needed = TRUE;
 	evas_info->display_geometry_method = mode;
-	ret = _mm_evas_renderer_apply_geometry(evas_info);
 
 	/* ecore_pipe_write is needed, because of setting ratio for letterbox mode */
-#if 0	/* FIXME: pause state only */
+	/* FIXME: pause state only */
 	if (evas_info->epipe) {
 		g_mutex_lock(&evas_info->idx_lock);
 		ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
@@ -1276,7 +1267,6 @@ int mm_evas_renderer_set_geometry(MMHandleType handle, int mode)
 		}
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
-#endif
 
 	return ret;
 }
@@ -1310,11 +1300,24 @@ int mm_evas_renderer_set_roi_area(MMHandleType handle, int x, int y, int w, int 
 
 	/* display mode is set to DISP_GEO_METHOD_CUSTOM_ROI internally */
 	evas_info->display_geometry_method = DISP_GEO_METHOD_CUSTOM_ROI;
-	evas_info->dst_roi.x = x;
-	evas_info->dst_roi.y = y;
-	evas_info->dst_roi.w = w;
-	evas_info->dst_roi.h = h;
-	ret = _mm_evas_renderer_apply_geometry(evas_info);
+	evas_info->extention->roi.x = x;
+	evas_info->extention->roi.y = y;
+	evas_info->extention->roi.w = w;
+	evas_info->extention->roi.h = h;
+	evas_info->update_needed = TRUE;
+
+	/* @@@ pipe_write could be needed because ratio can be changed on pause state */
+	if (evas_info->epipe) {
+		g_mutex_lock(&evas_info->idx_lock);
+		ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
+		if (!ret) {
+			LOGW("fail to ecore_pipe_write() for updating visibility\n");
+			ret = MM_ERROR_UNKNOWN;
+		} else {
+			ret = MM_ERROR_NONE;
+		}
+		g_mutex_unlock(&evas_info->idx_lock);
+	}
 
 	return ret;
 }
@@ -1332,10 +1335,10 @@ int mm_evas_renderer_get_roi_area(MMHandleType handle, int *x, int *y, int *w, i
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
 
-	*x = evas_info->dst_roi.x;
-	*y = evas_info->dst_roi.y;
-	*w = evas_info->dst_roi.w;
-	*h = evas_info->dst_roi.h;
+	*x = evas_info->extention->roi.x;
+	*y = evas_info->extention->roi.y;
+	*w = evas_info->extention->roi.w;
+	*h = evas_info->extention->roi.h;
 
 	return MM_ERROR_NONE;
 }
@@ -1344,6 +1347,7 @@ int mm_evas_renderer_set_flip(MMHandleType handle, int flip)
 {
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
+	guint value;
 
 	if (!evas_info) {
 		LOGW("skip it. it is not evas surface type or handle is not prepared");
@@ -1352,21 +1356,25 @@ int mm_evas_renderer_set_flip(MMHandleType handle, int flip)
 
 	switch(flip) {
 	case FLIP_NONE :
-		evas_info->flip = EVAS_IMAGE_ORIENT_NONE;
+		value = EVAS_IMAGE_ORIENT_NONE;
 		break;
 	case FLIP_HORIZONTAL:
-		evas_info->flip = EVAS_IMAGE_FLIP_HORIZONTAL;
+		value = EVAS_IMAGE_FLIP_HORIZONTAL;
 		break;
 	case FLIP_VERTICAL:
-		evas_info->flip = EVAS_IMAGE_FLIP_VERTICAL;
+		value = EVAS_IMAGE_FLIP_VERTICAL;
 		break;
 	case FLIP_BOTH:
-		evas_info->flip = EVAS_IMAGE_ORIENT_180;
+		value = EVAS_IMAGE_ORIENT_180;
 		break;
 	default:
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
-#if 0	/* FIXME: pause state only */
+	if (evas_info->extention->flip != value)
+		evas_info->update_needed = TRUE;
+	evas_info->extention->flip = value;
+
+	/* FIXME: pause state only */
 	if (evas_info->epipe) {
 		g_mutex_lock(&evas_info->idx_lock);
 		ret = ecore_pipe_write(evas_info->epipe, evas_info, UPDATE_TBM_SURF);
@@ -1378,7 +1386,7 @@ int mm_evas_renderer_set_flip(MMHandleType handle, int flip)
 		}
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
-#endif
+
 	return ret;
 }
 
@@ -1391,7 +1399,7 @@ int mm_evas_renderer_get_flip(MMHandleType handle, int *flip)
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
 
-	switch(evas_info->flip) {
+	switch(evas_info->extention->flip) {
 	case EVAS_IMAGE_ORIENT_NONE:
 		*flip = FLIP_NONE;
 		break;
