@@ -97,6 +97,7 @@ typedef struct {
 	gint h;
 
 	/* properties */
+	gboolean update_needed; /* to update geometry information on pause state */
 	visible_info visible;
 	rect_info eo_size;
 	rect_info dst_roi;
