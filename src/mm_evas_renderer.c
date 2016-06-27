@@ -36,6 +36,15 @@
 #define LOG_TAG "MM_EVAS_RENDER"
 //#define _INTERNAL_DEBUG_ /* debug only */
 
+#if 0
+#define MMER_FENTER();					LOGD("<ENTER>");
+#define MMER_FLEAVE();					LOGD("<LEAVE>");
+#else
+#define MMER_FENTER();
+#define MMER_FLEAVE();
+#endif
+
+#define SWAP(a, b) { gint tmp = a; a = b; b = tmp; }
 #define MM_CHECK_NULL( x_var ) \
 if ( ! x_var ) \
 { \
@@ -108,7 +117,9 @@ enum {
 };
 
 #ifdef _INTERNAL_DEBUG_
+int g_cnt = 0;
 void __print_idx(mm_evas_info *evas_info);
+int __dump_pkt(media_packet_h pkt);
 #endif
 /* internal */
 void _free_previous_packets(mm_evas_info *evas_info);
@@ -127,11 +138,12 @@ static void _mm_evas_renderer_unset_callback(mm_evas_info *evas_info);
 
 static void _evas_resize_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
 {
+	MMER_FENTER();
+
 	int x, y, w, h, ret;
 	x = y = w = h = 0;
 
 	mm_evas_info *evas_info = data;
-	LOGD("[ENTER]");
 
 	if (!evas_info || !evas_info->eo) {
 		return;
@@ -150,11 +162,13 @@ static void _evas_resize_cb(void *data, Evas *e, Evas_Object *obj, void *event_i
 		if (ret != MM_ERROR_NONE)
 			LOGW("fail to apply geometry info");
 	}
-	LOGD("[LEAVE]");
+	MMER_FLEAVE();
 }
 
 static void _evas_render_pre_cb(void *data, Evas *e, void *event_info)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = data;
 
 	if (!evas_info || !evas_info->eo) {
@@ -170,12 +184,15 @@ static void _evas_render_pre_cb(void *data, Evas *e, void *event_info)
 			LOGE("flushing packets are failed");
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
+	MMER_FLEAVE();
 }
 
 static void _evas_del_cb(void *data, Evas *e, Evas_Object *obj, void *event_info)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = data;
-	LOGD("[ENTER]");
+
 	if (!evas_info || !evas_info->eo) {
 		return;
 	}
@@ -184,14 +201,14 @@ static void _evas_del_cb(void *data, Evas *e, Evas_Object *obj, void *event_info
 		evas_object_image_data_set(evas_info->eo, NULL);
 		evas_info->eo = NULL;
 	}
-	LOGD("[LEAVE]");
+	MMER_FLEAVE();
 }
 
 void _evas_pipe_cb(void *data, void *buffer, update_info info)
 {
-	mm_evas_info *evas_info = data;
+	MMER_FENTER();
 
-	LOGD("[ENTER]");
+	mm_evas_info *evas_info = data;
 
 	if (!evas_info) {
 		LOGW("evas_info is NULL", evas_info);
@@ -275,7 +292,7 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 
 	if (evas_info->use_ratio) {
 		surf.data.tbm.ratio = (float) evas_info->w / evas_info->h;
-		LOGD("set ratio for letter mode");
+		LOGD("set ratio");
 	}
 	evas_object_size_hint_align_set(evas_info->eo, EVAS_HINT_FILL, EVAS_HINT_FILL);
 	evas_object_size_hint_weight_set(evas_info->eo, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
@@ -298,9 +315,10 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 	if ((prev_idx != -1) && evas_info->pkt_info[prev_idx].packet && (prev_idx != cur_idx))
 		_free_previous_packets(evas_info);
 
-	LOGD("[LEAVE]");
 	g_mutex_unlock(&evas_info->idx_lock);
 	g_mutex_unlock(&evas_info->mp_lock);
+
+	MMER_FLEAVE();
 
 	return;
 
@@ -314,11 +332,11 @@ void _evas_pipe_cb(void *data, void *buffer, update_info info)
 }
 
 #ifdef _INTERNAL_DEBUG_
-void __print_idx(mm_evas_info *evas_info)
+void __print_idx (mm_evas_info *evas_info)
 {
 	gint prev_idx = evas_info->pkt_info[evas_info->cur_idx].prev;
 	LOGE("***** start cur_idx : %d -> prev_idx : %d", evas_info->cur_idx, prev_idx);
-	while(prev_idx != -1)
+	while (prev_idx != -1)
 	{
 		LOGE("***** cur_idx : %d -> prev_idx : %d", prev_idx, evas_info->pkt_info[prev_idx].prev);
 		prev_idx = evas_info->pkt_info[prev_idx].prev;
@@ -326,10 +344,34 @@ void __print_idx(mm_evas_info *evas_info)
 	LOGE("***** end");
 	return;
 }
+
+int __dump_pkt (media_packet_h pkt)
+{
+	void *data;
+	uint64_t buf_size;
+	char filename[100] = {0};
+	FILE *fp = NULL;
+
+	sprintf(filename, "/tmp/DUMP_IMG_%2.2d.dump", g_cnt);
+	fp = fopen(filename, "wb");
+	if (fp == NULL)
+		return 1;
+
+	LOGW("DUMP IMG_%2.2d", g_cnt);
+	media_packet_get_buffer_data_ptr(pkt, &data);
+	media_packet_get_buffer_size(pkt, &buf_size);
+	LOGW("input data : %p, size %d\n", data, (int)buf_size);
+	fwrite(data, (int)buf_size, 1, fp);
+	fclose(fp);
+
+	return 0;
+}
 #endif
 
 void _free_previous_packets(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	gint index = evas_info->cur_idx;
 	gint prev_idx = evas_info->pkt_info[index].prev;
 
@@ -348,11 +390,16 @@ void _free_previous_packets(mm_evas_info *evas_info)
 		prev_idx = evas_info->pkt_info[prev_idx].prev;
 		LOGD("sent packet %d", evas_info->sent_buffer_cnt);
 	}
+
+	MMER_FLEAVE();
+
 	return;
 }
 
 static int _get_video_size(media_packet_h packet, mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	media_format_h fmt;
 	if (media_packet_get_format(packet, &fmt) == MEDIA_PACKET_ERROR_NONE) {
 		int w, h;
@@ -368,11 +415,16 @@ static int _get_video_size(media_packet_h packet, mm_evas_info *evas_info)
 	} else {
 		LOGW("media_packet_get_format is failed");
 	}
+
+	MMER_FLEAVE();
+
 	return false;
 }
 
 int _find_empty_index(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	int i;
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
 		if (!evas_info->pkt_info[i].packet) {
@@ -382,11 +434,15 @@ int _find_empty_index(mm_evas_info *evas_info)
 	}
 	LOGE("there is no empty idx");
 
+	MMER_FLEAVE();
+
 	return -1;
 }
 
 int _flush_packets(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	int ret_mp = MEDIA_PACKET_ERROR_NONE;
 	int i = 0;
@@ -395,8 +451,13 @@ int _flush_packets(mm_evas_info *evas_info)
 		LOGW("there is no esink info");
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
+
 	/* update the screen only if visible is ture */
 	if (evas_info->keep_screen && (evas_info->visible != VISIBLE_FALSE)) {
+		if (!evas_info->flush_buffer) {
+			LOGW("there is no flush buffer");
+			return MM_ERROR_INVALID_ARGUMENT;
+		}
 		Evas_Native_Surface surf;
 		rect_info result = { 0 };
 		evas_object_geometry_get(evas_info->eo, &evas_info->eo_size.x, &evas_info->eo_size.y, &evas_info->eo_size.w, &evas_info->eo_size.h);
@@ -412,7 +473,7 @@ int _flush_packets(mm_evas_info *evas_info)
 
 		if (evas_info->use_ratio) {
 			surf.data.tbm.ratio = (float) evas_info->w / evas_info->h;
-			LOGD("set ratio for letter mode");
+			LOGD("set ratio");
 		}
 		evas_object_size_hint_align_set(evas_info->eo, EVAS_HINT_FILL, EVAS_HINT_FILL);
 		evas_object_size_hint_weight_set(evas_info->eo, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
@@ -467,6 +528,8 @@ int _flush_packets(mm_evas_info *evas_info)
 
 	evas_object_image_pixels_dirty_set (evas_info->eo, EINA_TRUE);
 	evas_info->retrieve_packet = FALSE;
+
+	MMER_FLEAVE();
 
 	return ret;
 }
@@ -523,22 +586,28 @@ int _reset_pipe(mm_evas_info *evas_info)
 
 static void _mm_evas_renderer_set_callback(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
 	if (evas_info->eo) {
 		SET_EVAS_OBJECT_EVENT_CALLBACK(evas_info->eo, evas_info);
 		SET_EVAS_EVENT_CALLBACK(evas_object_evas_get(evas_info->eo), evas_info);
 	}
+	MMER_FLEAVE();
 }
 
 static void _mm_evas_renderer_unset_callback(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
 	if (evas_info->eo) {
 		UNSET_EVAS_OBJECT_EVENT_CALLBACK(evas_info->eo);
 		UNSET_EVAS_EVENT_CALLBACK(evas_object_evas_get(evas_info->eo));
 	}
+	MMER_FLEAVE();
 }
 
 int _mm_evas_renderer_create(mm_evas_info **evas_info)
 {
+	MMER_FENTER();
+
 	mm_evas_info *ptr = NULL;
 	ptr = g_malloc0(sizeof(mm_evas_info));
 
@@ -552,6 +621,8 @@ int _mm_evas_renderer_create(mm_evas_info **evas_info)
 	g_mutex_init(&ptr->mp_lock);
 	g_mutex_init(&ptr->idx_lock);
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 
  ERROR:
@@ -561,6 +632,8 @@ int _mm_evas_renderer_create(mm_evas_info **evas_info)
 
 int _mm_evas_renderer_destroy(mm_evas_info **evas_info)
 {
+	MMER_FENTER();
+
 	mm_evas_info *ptr = (mm_evas_info *)*evas_info;
 	MM_CHECK_NULL(ptr);
 	int ret = MM_ERROR_NONE;
@@ -574,11 +647,14 @@ int _mm_evas_renderer_destroy(mm_evas_info **evas_info)
 	g_free(ptr);
 	ptr = NULL;
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(evas_info);
 	MM_CHECK_NULL(eo);
 	g_mutex_lock(&evas_info->idx_lock);
@@ -607,11 +683,14 @@ int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo)
 
 	g_mutex_unlock(&evas_info->idx_lock);
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(evas_info);
 	g_mutex_lock(&evas_info->idx_lock);
 
@@ -662,11 +741,15 @@ int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 
 	g_mutex_unlock(&evas_info->idx_lock);
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *result)
 {
+	MMER_FENTER();
+
 	if (!evas_info || !evas_info->eo) {
 		LOGW("there is no evas_info or evas object");
 		return;
@@ -736,7 +819,7 @@ void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *resul
 		break;
 	case DISP_GEO_METHOD_CUSTOM_ROI:
 		LOGD("custom roi mode");
-		evas_info->use_ratio= FALSE;
+		evas_info->use_ratio= TRUE;
 		result->x = evas_info->dst_roi.x;
 		result->y = evas_info->dst_roi.y;
 		result->w = evas_info->dst_roi.w;
@@ -751,10 +834,14 @@ void _mm_evas_renderer_update_geometry(mm_evas_info *evas_info, rect_info *resul
 		break;
 	}
 	LOGD("geometry result [%d, %d, %d, %d]", result->x, result->y, result->w, result->h);
+
+	MMER_FLEAVE();
 }
 
 int _mm_evas_renderer_apply_geometry(mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	if (!evas_info || !evas_info->eo) {
 		LOGW("there is no evas_info or evas object");
 		return MM_ERROR_NONE;
@@ -773,9 +860,8 @@ int _mm_evas_renderer_apply_geometry(mm_evas_info *evas_info)
 
 		if (evas_info->use_ratio) {
 			surf->data.tbm.ratio = (float) evas_info->w / evas_info->h;
-			LOGD("set ratio for letter mode");
+			LOGD("set ratio");
 		}
-
 		if (result.x || result.y)
 			LOGD("coordinate x, y (%d, %d) for locating video to center", result.x, result.y);
 
@@ -785,11 +871,15 @@ int _mm_evas_renderer_apply_geometry(mm_evas_info *evas_info)
 	} else
 		LOGW("there is no surf");
 	/* FIXME: before pipe_cb is invoked, apply_geometry can be called. */
+
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int _mm_evas_renderer_retrieve_all_packets(mm_evas_info *evas_info, bool keep_screen)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(evas_info);
 
 	int ret = MM_ERROR_NONE;
@@ -818,12 +908,16 @@ int _mm_evas_renderer_retrieve_all_packets(mm_evas_info *evas_info, bool keep_sc
 	}
 	g_mutex_unlock(&evas_info->idx_lock);
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 /* make buffer for copying */
 int _mm_evas_renderer_make_flush_buffer (mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	if (evas_info->cur_idx == -1) {
 		LOGW("there is no remained buffer");
 		return MM_ERROR_INVALID_ARGUMENT;
@@ -911,6 +1005,8 @@ int _mm_evas_renderer_make_flush_buffer (mm_evas_info *evas_info)
 
 	evas_info->flush_buffer = flush_buffer;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 
 ERROR:
@@ -930,6 +1026,8 @@ ERROR:
 /* release flush buffer */
 void _mm_evas_renderer_release_flush_buffer (mm_evas_info *evas_info)
 {
+	MMER_FENTER();
+
 	LOGW("release FLUSH BUFFER start");
 	if (evas_info->flush_buffer->bo) {
 		evas_info->flush_buffer->bo = NULL;
@@ -944,11 +1042,15 @@ void _mm_evas_renderer_release_flush_buffer (mm_evas_info *evas_info)
 	free(evas_info->flush_buffer);
 	evas_info->flush_buffer = NULL;
 
+	MMER_FLEAVE();
+
 	return;
 }
 
 void mm_evas_renderer_write(media_packet_h packet, void *data)
 {
+	MMER_FENTER();
+
 	if (!packet) {
 		LOGE("packet %p is NULL", packet);
 		return;
@@ -999,7 +1101,16 @@ void mm_evas_renderer_write(media_packet_h packet, void *data)
 		if (index == -1) {
 			goto ERROR;
 		}
-
+#ifdef _INTERNAL_DEBUG_
+		int ret2 = 0;
+		if ((g_cnt%10==0) && g_cnt<500) {
+			ret2 = __dump_pkt(packet);
+		}
+		if (ret2) {
+			LOGW ("__dump_pkt() is failed");
+		} else
+			g_cnt++;
+#endif
 		/* save previous index */
 		handle->pkt_info[index].prev = handle->cur_idx;
 		handle->pkt_info[index].packet = packet;
@@ -1024,6 +1135,8 @@ void mm_evas_renderer_write(media_packet_h packet, void *data)
 	}
 	g_mutex_unlock(&handle->idx_lock);
 
+	MMER_FLEAVE();
+
 	return;
 ERROR:
 	g_mutex_unlock(&handle->idx_lock);
@@ -1042,6 +1155,8 @@ INVALID_PARAM:
 
 int mm_evas_renderer_update_param(MMHandleType handle)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1082,11 +1197,14 @@ int mm_evas_renderer_update_param(MMHandleType handle)
 		}
 	}
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int mm_evas_renderer_create(MMHandleType *handle, Evas_Object *eo)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(handle);
 
 	int ret = MM_ERROR_NONE;
@@ -1112,6 +1230,7 @@ int mm_evas_renderer_create(MMHandleType *handle, Evas_Object *eo)
 
 int mm_evas_renderer_destroy(MMHandleType *handle)
 {
+	MMER_FENTER();
 	MM_CHECK_NULL(handle);
 
 	int ret = MM_ERROR_NONE;
@@ -1129,11 +1248,15 @@ int mm_evas_renderer_destroy(MMHandleType *handle)
 	}
 	*handle = NULL;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_visible(MMHandleType handle, bool visible)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1159,11 +1282,15 @@ int mm_evas_renderer_set_visible(MMHandleType handle, bool visible)
 		LOGW("there is no epipe. we cant update it");
 	}
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int mm_evas_renderer_get_visible(MMHandleType handle, bool *visible)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1176,11 +1303,15 @@ int mm_evas_renderer_get_visible(MMHandleType handle, bool *visible)
 	else
 		*visible = TRUE;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_rotation(MMHandleType handle, int rotate)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1218,11 +1349,15 @@ int mm_evas_renderer_set_rotation(MMHandleType handle, int rotate)
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
 #endif
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int mm_evas_renderer_get_rotation(MMHandleType handle, int *rotate)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1247,11 +1382,15 @@ int mm_evas_renderer_get_rotation(MMHandleType handle, int *rotate)
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_geometry(MMHandleType handle, int mode)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1278,11 +1417,15 @@ int mm_evas_renderer_set_geometry(MMHandleType handle, int mode)
 	}
 #endif
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int mm_evas_renderer_get_geometry(MMHandleType handle, int *mode)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1291,11 +1434,15 @@ int mm_evas_renderer_get_geometry(MMHandleType handle, int *mode)
 	}
 	*mode = evas_info->display_geometry_method;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_roi_area(MMHandleType handle, int x, int y, int w, int h)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1316,11 +1463,15 @@ int mm_evas_renderer_set_roi_area(MMHandleType handle, int x, int y, int w, int 
 	evas_info->dst_roi.h = h;
 	ret = _mm_evas_renderer_apply_geometry(evas_info);
 
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int mm_evas_renderer_get_roi_area(MMHandleType handle, int *x, int *y, int *w, int *h)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1337,11 +1488,15 @@ int mm_evas_renderer_get_roi_area(MMHandleType handle, int *x, int *y, int *w, i
 	*w = evas_info->dst_roi.w;
 	*h = evas_info->dst_roi.h;
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_set_flip(MMHandleType handle, int flip)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
@@ -1379,11 +1534,16 @@ int mm_evas_renderer_set_flip(MMHandleType handle, int flip)
 		g_mutex_unlock(&evas_info->idx_lock);
 	}
 #endif
+
+	MMER_FLEAVE();
+
 	return ret;
 }
 
 int mm_evas_renderer_get_flip(MMHandleType handle, int *flip)
 {
+	MMER_FENTER();
+
 	mm_evas_info *evas_info = (mm_evas_info *)handle;
 
 	if (!evas_info) {
@@ -1408,11 +1568,15 @@ int mm_evas_renderer_get_flip(MMHandleType handle, int *flip)
 		return MM_ERROR_INVALID_ARGUMENT;
 	}
 
+	MMER_FLEAVE();
+
 	return MM_ERROR_NONE;
 }
 
 int mm_evas_renderer_retrieve_all_packets (MMHandleType handle, bool keep_screen)
 {
+	MMER_FENTER();
+
 	int ret = MM_ERROR_NONE;
 	mm_evas_info *evas_info = (mm_evas_info*) handle;
 
@@ -1421,6 +1585,8 @@ int mm_evas_renderer_retrieve_all_packets (MMHandleType handle, bool keep_screen
 		return MM_ERROR_RESOURCE_NOT_INITIALIZED;
 	}
 	ret = _mm_evas_renderer_retrieve_all_packets(evas_info, keep_screen);
+
+	MMER_FLEAVE();
 
 	return ret;
 }
