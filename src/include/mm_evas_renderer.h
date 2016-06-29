@@ -151,7 +151,7 @@ int mm_evas_renderer_update_param(MMHandleType handle);
 void mm_evas_renderer_write(media_packet_h packet, void *data);
 /* if user want to retrieve all packets, this API will be called */
 /* if keep_screen is set to true, flush buffer will be made */
-int mm_evas_renderer_retrieve_all_packets (MMHandleType handle, bool keep_screen);
+int mm_evas_renderer_retrieve_all_packets(MMHandleType handle, bool keep_screen);
 
 #ifdef __cplusplus
 }
