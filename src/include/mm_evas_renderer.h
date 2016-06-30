@@ -87,6 +87,9 @@ typedef struct {
 	tbm_surface_h tbm_surf;
 } flush_info;
 
+/* notice to finish using media_packet*/
+typedef void (*mm_evas_renderer_media_packet_rendered_cb)(media_packet_h packet, void *user_data);
+
 /* evas info for evas surface type */
 typedef struct {
 	Evas_Object *eo;
@@ -123,6 +126,10 @@ typedef struct {
 	flush_info *flush_buffer;
 	gboolean retrieve_packet; /* after flush buffer is made by API, flush will be executed in main thread callback */
 	gboolean keep_screen;
+
+	/* rendered callback */
+	mm_evas_renderer_media_packet_rendered_cb packet_rendered_cb;
+	void *packet_rendered_cb_user;
 } mm_evas_info;
 
 /* create and initialize evas_info */
@@ -152,6 +159,9 @@ void mm_evas_renderer_write(media_packet_h packet, void *data);
 /* if user want to retrieve all packets, this API will be called */
 /* if keep_screen is set to true, flush buffer will be made */
 int mm_evas_renderer_retrieve_all_packets(MMHandleType handle, bool keep_screen);
+/* notice to finish using media_packet */
+/* if you want to unset callback, set values to NULL */
+int mm_evas_renderer_set_packet_rendered_callback(MMHandleType handle, mm_evas_renderer_media_packet_rendered_cb callback, void *user_data);
 
 #ifdef __cplusplus
 }
