@@ -375,8 +375,7 @@ static void _free_previous_packets(mm_evas_info *evas_info)
 
 	while (prev_idx != -1) {
 		LOGD("destroy previous packet [%p] idx %d", evas_info->pkt_info[prev_idx].packet, prev_idx);
-		if (media_packet_destroy(evas_info->pkt_info[prev_idx].packet) != MEDIA_PACKET_ERROR_NONE)
-			LOGE("media_packet_destroy failed %p", evas_info->pkt_info[prev_idx].packet);
+		evas_info->packet_rendered_cb(evas_info->pkt_info[prev_idx].packet, evas_info->packet_rendered_cb_user);
 		evas_info->pkt_info[prev_idx].packet = NULL;
 		evas_info->pkt_info[prev_idx].tbm_surf = NULL;
 		evas_info->pkt_info[index].prev = -1;
@@ -440,8 +439,6 @@ static int _flush_packets(mm_evas_info *evas_info)
 {
 	MMER_FENTER();
 
-	int ret = MM_ERROR_NONE;
-	int ret_mp = MEDIA_PACKET_ERROR_NONE;
 	int i = 0;
 
 	if (!evas_info) {
@@ -500,12 +497,8 @@ static int _flush_packets(mm_evas_info *evas_info)
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
 		if (evas_info->pkt_info[i].packet) {
 			LOGD("destroy packet [%p]", evas_info->pkt_info[i].packet);
-			ret_mp = media_packet_destroy(evas_info->pkt_info[i].packet);
-			if (ret_mp != MEDIA_PACKET_ERROR_NONE) {
-				LOGW("media_packet_destroy failed %p", evas_info->pkt_info[i].packet);
-				ret = MM_ERROR_UNKNOWN;
-			} else
-				evas_info->sent_buffer_cnt--;
+			evas_info->packet_rendered_cb(evas_info->pkt_info[i].packet, evas_info->packet_rendered_cb_user);
+			evas_info->sent_buffer_cnt--;
 			evas_info->pkt_info[i].packet = NULL;
 			evas_info->pkt_info[i].tbm_surf = NULL;
 			evas_info->pkt_info[i].prev = -1;
@@ -523,7 +516,7 @@ static int _flush_packets(mm_evas_info *evas_info)
 
 	MMER_FLEAVE();
 
-	return ret;
+	return MM_ERROR_NONE;
 }
 
 #if 0
@@ -544,12 +537,8 @@ int _reset_pipe(mm_evas_info *evas_info)
 		if (evas_info->pkt_info[i].packet) {
 			/* destroy all packets */
 			LOGD("destroy packet [%p]", evas_info->pkt_info[i].packet);
-			ret_mp = media_packet_destroy(evas_info->pkt_info[i].packet);
-			if (ret_mp != MEDIA_PACKET_ERROR_NONE) {
-				LOGW("media_packet_destroy failed %p", evas_info->pkt_info[i].packet);
-				ret = MM_ERROR_UNKNOWN;
-			} else
-				evas_info->sent_buffer_cnt--;
+			evas_info->packet_rendered_cb(evas_info->pkt_info[i].packet, evas_info->packet_rendered_cb_user);
+			evas_info->sent_buffer_cnt--;
 			evas_info->pkt_info[i].packet = NULL;
 			evas_info->pkt_info[i].tbm_surf = NULL;
 			evas_info->pkt_info[i].prev = -1;
@@ -687,7 +676,6 @@ static int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 
 	int i;
 	int ret = MM_ERROR_NONE;
-	int ret_mp = MEDIA_PACKET_ERROR_NONE;
 
 	if (evas_info->eo) {
 		_mm_evas_renderer_unset_callback(evas_info);
@@ -712,12 +700,8 @@ static int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 		if (evas_info->pkt_info[i].packet) {
 			/* destroy all packets */
 			LOGD("destroy packet [%p]", evas_info->pkt_info[i].packet);
-			ret_mp = media_packet_destroy(evas_info->pkt_info[i].packet);
-			if (ret_mp != MEDIA_PACKET_ERROR_NONE) {
-				LOGW("media_packet_destroy failed %p", evas_info->pkt_info[i].packet);
-				ret = MM_ERROR_UNKNOWN;
-			} else
-				evas_info->sent_buffer_cnt--;
+			evas_info->packet_rendered_cb(evas_info->pkt_info[i].packet, evas_info->packet_rendered_cb_user);
+			evas_info->sent_buffer_cnt--;
 			evas_info->pkt_info[i].packet = NULL;
 			evas_info->pkt_info[i].tbm_surf = NULL;
 			evas_info->pkt_info[i].prev = -1;
@@ -728,6 +712,8 @@ static int _mm_evas_renderer_reset(mm_evas_info *evas_info)
 		LOGE("it should be 0 --> [%d]", evas_info->sent_buffer_cnt);
 	evas_info->sent_buffer_cnt = 0;
 	evas_info->cur_idx = -1;
+	evas_info->packet_rendered_cb = NULL;
+	evas_info->packet_rendered_cb_user = NULL;
 
 	g_mutex_unlock(&evas_info->idx_lock);
 
@@ -1126,8 +1112,7 @@ INVALID_PARAM:
 	if (packet) {
 		g_mutex_lock(&handle->mp_lock);
 		LOGD("cant write. destroy packet [%p]", packet);
-		if (media_packet_destroy(packet) != MEDIA_PACKET_ERROR_NONE)
-			LOGE("media_packet_destroy failed %p", packet);
+		handle->packet_rendered_cb(packet, handle->packet_rendered_cb_user);
 		packet = NULL;
 		g_mutex_unlock(&handle->mp_lock);
 	}
@@ -1181,7 +1166,7 @@ int mm_evas_renderer_update_param(MMHandleType handle)
 	return ret;
 }
 
-int mm_evas_renderer_create(MMHandleType *handle, Evas_Object *eo)
+int mm_evas_renderer_create(MMHandleType *handle, Evas_Object *eo, mm_evas_renderer_media_packet_rendered_cb callback, void *user_data)
 {
 	MMER_FENTER();
 	MM_CHECK_NULL(handle);
@@ -1201,6 +1186,8 @@ int mm_evas_renderer_create(MMHandleType *handle, Evas_Object *eo)
 			LOGE("fail to destroy evas_info");
 		return ret;
 	}
+	evas_info->packet_rendered_cb = callback;
+	evas_info->packet_rendered_cb_user = user_data;
 
 	*handle = (MMHandleType)evas_info;
 
