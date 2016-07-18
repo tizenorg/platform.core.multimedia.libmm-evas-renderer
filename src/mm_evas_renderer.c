@@ -947,7 +947,6 @@ static int _mm_evas_renderer_make_flush_buffer(mm_evas_info *evas_info)
 		return FALSE;
 	}
 	memset(flush_buffer, 0x0, sizeof(flush_info));
-	LOGD("flush_buffer %p is allocated", flush_buffer);
 
 	ret = media_packet_get_tbm_surface(packet, &src_tbm_surf);
 	if (ret != MEDIA_PACKET_ERROR_NONE || !src_tbm_surf) {
@@ -1148,7 +1147,7 @@ INVALID_PARAM:
 	if (packet) {
 		g_mutex_lock(&handle->mp_lock);
 		LOGD("cant write. destroy packet [%p]", packet);
-		if (handle->packet_rendered_cb) {
+		if (handle && handle->packet_rendered_cb) {
 			handle->packet_rendered_cb(packet, handle->packet_rendered_cb_user);
 		} else {
 			if (media_packet_destroy(packet) != MEDIA_PACKET_ERROR_NONE)
