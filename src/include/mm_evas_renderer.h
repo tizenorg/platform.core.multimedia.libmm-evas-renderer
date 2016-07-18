@@ -126,6 +126,7 @@ typedef struct {
 	flush_info *flush_buffer;
 	gboolean retrieve_packet; /* after flush buffer is made by API, flush will be executed in main thread callback */
 	gboolean keep_screen;
+	tbm_bufmgr bufmgr;
 
 	/* rendered callback */
 	mm_evas_renderer_media_packet_rendered_cb packet_rendered_cb;
