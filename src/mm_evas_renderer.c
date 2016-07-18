@@ -111,9 +111,11 @@ enum {
 };
 
 #ifdef _INTERNAL_DEBUG_
-static int g_cnt = 0;
-static void __print_idx(mm_evas_info *evas_info);
+static int g_cnt_in = 0;
+static int g_cnt_out = 0;
+//static void __print_idx(mm_evas_info *evas_info);
 static int __dump_pkt(media_packet_h pkt);
+static int __dump_surf(tbm_surface_h tbm_surf);
 #endif
 /* internal */
 static void _free_previous_packets(mm_evas_info *evas_info);
@@ -298,7 +300,15 @@ static void _evas_pipe_cb(void *data, void *buffer, update_info info)
 	evas_object_size_hint_weight_set(evas_info->eo, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
 	if (evas_info->w > 0 && evas_info->h > 0)
 		evas_object_image_size_set(evas_info->eo, evas_info->w, evas_info->h);
-
+#ifdef _INTERNAL_DEBUG_
+	int ret2 = 0;
+	if ((g_cnt_out%5 == 0) && (g_cnt_out < 500))
+		ret2 = __dump_surf(evas_info->pkt_info[cur_idx].tbm_surf);
+	if (ret2)
+		LOGW("__dump_surf() is failed");
+	else
+		g_cnt_out++;
+#endif
 	evas_object_image_native_surface_set(evas_info->eo, &surf);
 	LOGD("native surface set finish");
 
@@ -331,6 +341,7 @@ static void _evas_pipe_cb(void *data, void *buffer, update_info info)
 }
 
 #ifdef _INTERNAL_DEBUG_
+#if 0
 static void __print_idx(mm_evas_info *evas_info)
 {
 	gint prev_idx = evas_info->pkt_info[evas_info->cur_idx].prev;
@@ -342,25 +353,43 @@ static void __print_idx(mm_evas_info *evas_info)
 	LOGE("***** end");
 	return;
 }
-
+#endif
 static int __dump_pkt(media_packet_h pkt)
 {
 	void *data;
-	uint64_t buf_size;
-	char filename[100] = {0};
+	uint64_t size;
+	char filename[128] = {0};
 	FILE *fp = NULL;
 
-	sprintf(filename, "/tmp/DUMP_IMG_%2.2d.dump", g_cnt);
+	sprintf(filename, "/tmp/DUMP_IN_IMG_%2.2d.dump", g_cnt_in);
 	fp = fopen(filename, "wb");
 	if (fp == NULL)
 		return 1;
 
-	LOGW("DUMP IMG_%2.2d", g_cnt);
 	media_packet_get_buffer_data_ptr(pkt, &data);
-	media_packet_get_buffer_size(pkt, &buf_size);
-	LOGW("input data : %p, size %d\n", data, (int)buf_size);
-	fwrite(data, (int)buf_size, 1, fp);
+	media_packet_get_buffer_size(pkt, &size);
+	LOGI("DUMP_IN_IMG_%2.2d : buffer size(%d) data(%p)", g_cnt_in, (int)size, data);
+
+	fwrite(data, (int)size, 1, fp);
 	fclose(fp);
+
+	return 0;
+}
+
+static int __dump_surf(tbm_surface_h tbm_surf)
+{
+	char filename[128] = {0};
+	tbm_surface_info_s info = {0};
+
+	sprintf(filename, "DUMP_OUT_IMG_%2.2d.yuv", g_cnt_out);
+	if (tbm_surface_get_info(tbm_surf, &info)) {
+		LOGE("get_info is failed");
+		return 1;
+	}
+	tbm_surface_internal_dump_start("/tmp", info.width, info.height, 1);
+	tbm_surface_internal_dump_buffer(tbm_surf, filename);
+	tbm_surface_internal_dump_end();
+	LOGI("DUMP_OUT_IMG_%2.2d : buffer size(%d) surf(%p) %d*%d", g_cnt_out, (int)info.size, tbm_surf, info.width, info.height);
 
 	return 0;
 }
@@ -664,6 +693,7 @@ static int _mm_evas_renderer_set_info(mm_evas_info *evas_info, Evas_Object *eo)
 
 	LOGD("set evas_info");
 	int i;
+
 	for (i = 0; i < MAX_PACKET_NUM; i++) {
 		evas_info->pkt_info[i].packet = NULL;
 		evas_info->pkt_info[i].tbm_surf = NULL;
@@ -930,10 +960,9 @@ static int _mm_evas_renderer_make_flush_buffer(mm_evas_info *evas_info)
 	flush_info *flush_buffer = NULL;
 	tbm_bo src_bo = NULL;
 	tbm_surface_h src_tbm_surf = NULL;
-	int src_size = 0;
+	tbm_surface_info_s src_info = {0};
+	int size = 0;
 	tbm_bo bo = NULL;
-	tbm_surface_info_s info = {0};
-	tbm_bo_handle vaddr_src = {0};
 	tbm_bo_handle vaddr_dst = {0};
 	int ret = MM_ERROR_NONE;
 
@@ -956,16 +985,18 @@ static int _mm_evas_renderer_make_flush_buffer(mm_evas_info *evas_info)
 
 	/* get src buffer info */
 	src_bo = tbm_surface_internal_get_bo(src_tbm_surf, 0);
-	src_size = tbm_surface_internal_get_size(src_tbm_surf);
-	if (!src_bo || !src_size) {
-		LOGE("src bo(%p), size(%d)", src_bo, src_size);
+	if (tbm_surface_get_info(src_tbm_surf, &src_info)) {
+		LOGW("get tbm_surface_info is failed");
 		goto ERROR;
 	}
-	LOGD("src bo(%p), size(%d)", src_bo, src_size);
+	if (!src_bo || !src_info.size) {
+		LOGE("src bo(%p), size(%d)", src_bo, src_info.size);
+		goto ERROR;
+	}
+	LOGD("src bo(%p), size(%d)", src_bo, src_info.size);
 
 	/* create tbm surface */
-	info.format = tbm_surface_get_format(src_tbm_surf);
-	flush_buffer->tbm_surf = tbm_surface_create(evas_info->w, evas_info->h, info.format);
+	flush_buffer->tbm_surf = tbm_surface_create(evas_info->w, evas_info->h, src_info.format);
 	if (!flush_buffer->tbm_surf) {
 		LOGE("tbm_surf is NULL!!");
 		goto ERROR;
@@ -973,36 +1004,51 @@ static int _mm_evas_renderer_make_flush_buffer(mm_evas_info *evas_info)
 
 	/* get bo and size */
 	bo = tbm_surface_internal_get_bo(flush_buffer->tbm_surf, 0);
-	info.size = tbm_surface_internal_get_size(flush_buffer->tbm_surf);
-	if (!bo || !info.size) {
-		LOGE("dst bo(%p), size(%d)", bo, info.size);
+	size = tbm_surface_internal_get_size(flush_buffer->tbm_surf);
+	if (!bo || !size) {
+		LOGE("dst bo(%p), size(%d)", bo, size);
 		goto ERROR;
 	}
-	LOGD("dst bo(%p), size(%d)", bo, info.size);
-
-	/* FIXME: each plane should be copied */
-	info.num_planes = tbm_surface_internal_get_num_planes(info.format);
+	LOGD("dst bo(%p), size(%d)", bo, size);
 
 	flush_buffer->bo = bo;
 
-	vaddr_src = tbm_bo_map(src_bo, TBM_DEVICE_CPU, TBM_OPTION_READ|TBM_OPTION_WRITE);
 	vaddr_dst = tbm_bo_map(bo, TBM_DEVICE_CPU, TBM_OPTION_READ|TBM_OPTION_WRITE);
-	if (!vaddr_src.ptr || !vaddr_dst.ptr) {
-		LOGW("get vaddr failed src %p, dst %p", vaddr_src.ptr, vaddr_dst.ptr);
-		if (vaddr_src.ptr)
-			tbm_bo_unmap(src_bo);
+	if (!vaddr_dst.ptr) {
+		LOGW("vaddr_dst is NULL", vaddr_dst.ptr);
 		if (vaddr_dst.ptr)
 			tbm_bo_unmap(bo);
 		goto ERROR;
 	} else {
-		memset(vaddr_dst.ptr, 0x0, info.size);
+		memset(vaddr_dst.ptr, 0x0, size);
 		LOGW("tbm_bo_map(vaddr) is finished, bo(%p), vaddr(%p)", bo, vaddr_dst.ptr);
 	}
 
 	/* copy buffer */
-	memcpy(vaddr_dst.ptr, vaddr_src.ptr, src_size);
+	switch (src_info.format) {
+	case TBM_FORMAT_YUV420:
+		memcpy(vaddr_dst.ptr, src_info.planes[0].ptr, src_info.planes[0].stride * src_info.height);
+		vaddr_dst.ptr += src_info.planes[0].stride * src_info.height;
+		memcpy(vaddr_dst.ptr, src_info.planes[1].ptr, src_info.planes[1].stride * (src_info.height >> 1));
+		vaddr_dst.ptr += src_info.planes[1].stride * (src_info.height >> 1);
+		memcpy(vaddr_dst.ptr, src_info.planes[2].ptr, src_info.planes[2].stride * (src_info.height >> 1));
+		break;
+	case TBM_FORMAT_NV12:
+		memcpy(vaddr_dst.ptr, src_info.planes[0].ptr, src_info.planes[0].stride * src_info.height);
+		vaddr_dst.ptr += src_info.planes[0].stride * src_info.height;
+		memcpy(vaddr_dst.ptr, src_info.planes[1].ptr, src_info.planes[1].stride * (src_info.height >> 1));
+		break;
+	default:
+		LOGW("unsupported format");
+		break;
+	}
 
-	tbm_bo_unmap(src_bo);
+#ifdef _INTERNAL_DEBUG_
+	__dump_surf(flush_buffer->tbm_surf);
+	g_cnt_out++;
+	LOGD("flush_buffer dump is done");
+#endif
+
 	tbm_bo_unmap(bo);
 	LOGW("copy is done. tbm surface : %p", flush_buffer->tbm_surf);
 
@@ -1105,13 +1151,13 @@ void mm_evas_renderer_write(media_packet_h packet, void *data)
 
 #ifdef _INTERNAL_DEBUG_
 		int ret2 = 0;
-		if ((g_cnt%10 == 0) && (g_cnt < 500))
+		if ((g_cnt_in%10 == 0) && (g_cnt_in < 500))
 			ret2 = __dump_pkt(packet);
 
 		if (ret2)
 			LOGW("__dump_pkt() is failed");
 		else
-			g_cnt++;
+			g_cnt_in++;
 #endif
 		/* save previous index */
 		handle->pkt_info[index].prev = handle->cur_idx;
