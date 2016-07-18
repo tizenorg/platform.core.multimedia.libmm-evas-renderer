@@ -930,9 +930,9 @@ static int _mm_evas_renderer_make_flush_buffer(mm_evas_info *evas_info)
 	flush_info *flush_buffer = NULL;
 	tbm_bo src_bo = NULL;
 	tbm_surface_h src_tbm_surf = NULL;
-	int src_size = 0;
+	tbm_surface_info_s src_info = {0};
+	int size = 0;
 	tbm_bo bo = NULL;
-	tbm_surface_info_s info = {0};
 	tbm_bo_handle vaddr_src = {0};
 	tbm_bo_handle vaddr_dst = {0};
 	int ret = MM_ERROR_NONE;
@@ -956,16 +956,18 @@ static int _mm_evas_renderer_make_flush_buffer(mm_evas_info *evas_info)
 
 	/* get src buffer info */
 	src_bo = tbm_surface_internal_get_bo(src_tbm_surf, 0);
-	src_size = tbm_surface_internal_get_size(src_tbm_surf);
-	if (!src_bo || !src_size) {
-		LOGE("src bo(%p), size(%d)", src_bo, src_size);
+	if (tbm_surface_get_info(src_tbm_surf, &src_info)) {
+		LOGW("get tbm_surface_info is failed");
 		goto ERROR;
 	}
-	LOGD("src bo(%p), size(%d)", src_bo, src_size);
+	if (!src_bo || !src_info.size) {
+		LOGE("src bo(%p), size(%d)", src_bo, src_info.size);
+		goto ERROR;
+	}
+	LOGD("src bo(%p), size(%d)", src_bo, src_info.size);
 
 	/* create tbm surface */
-	info.format = tbm_surface_get_format(src_tbm_surf);
-	flush_buffer->tbm_surf = tbm_surface_create(evas_info->w, evas_info->h, info.format);
+	flush_buffer->tbm_surf = tbm_surface_create(evas_info->w, evas_info->h, src_info.format);
 	if (!flush_buffer->tbm_surf) {
 		LOGE("tbm_surf is NULL!!");
 		goto ERROR;
@@ -973,15 +975,14 @@ static int _mm_evas_renderer_make_flush_buffer(mm_evas_info *evas_info)
 
 	/* get bo and size */
 	bo = tbm_surface_internal_get_bo(flush_buffer->tbm_surf, 0);
-	info.size = tbm_surface_internal_get_size(flush_buffer->tbm_surf);
-	if (!bo || !info.size) {
-		LOGE("dst bo(%p), size(%d)", bo, info.size);
+	size = tbm_surface_internal_get_size(flush_buffer->tbm_surf);
+	if (!bo || !size) {
+		LOGE("dst bo(%p), size(%d)", bo, size);
 		goto ERROR;
 	}
-	LOGD("dst bo(%p), size(%d)", bo, info.size);
+	LOGD("dst bo(%p), size(%d)", bo, size);
 
 	/* FIXME: each plane should be copied */
-	info.num_planes = tbm_surface_internal_get_num_planes(info.format);
 
 	flush_buffer->bo = bo;
 
@@ -995,12 +996,12 @@ static int _mm_evas_renderer_make_flush_buffer(mm_evas_info *evas_info)
 			tbm_bo_unmap(bo);
 		goto ERROR;
 	} else {
-		memset(vaddr_dst.ptr, 0x0, info.size);
+		memset(vaddr_dst.ptr, 0x0, size);
 		LOGW("tbm_bo_map(vaddr) is finished, bo(%p), vaddr(%p)", bo, vaddr_dst.ptr);
 	}
 
 	/* copy buffer */
-	memcpy(vaddr_dst.ptr, vaddr_src.ptr, src_size);
+	memcpy(vaddr_dst.ptr, vaddr_src.ptr, src_info.size);
 
 	tbm_bo_unmap(src_bo);
 	tbm_bo_unmap(bo);
